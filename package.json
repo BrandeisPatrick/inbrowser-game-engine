@@ -1,0 +1,65 @@
+{
+  "name": "@vibe/engine",
+  "version": "0.3.1",
+  "description": "Browser game engine on Three.js/WebGL2: fixed-step core with CPU/GPU profiler, deterministic JS vehicle physics, atmosphere + post-processing, instancing/LOD/impostor utilities, data-driven city worlds (OpenStreetMap + terrain), traffic AI, input, camera rigs, synth audio, DOM UI widgets",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BrandeisPatrick/inbrowser-game-engine.git"
+  },
+  "homepage": "https://github.com/BrandeisPatrick/inbrowser-game-engine#readme",
+  "bugs": {
+    "url": "https://github.com/BrandeisPatrick/inbrowser-game-engine/issues"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./core": "./src/core/index.js",
+    "./physics": "./src/physics/index.js",
+    "./render": "./src/render/index.js",
+    "./input": "./src/input/index.js",
+    "./camera": "./src/camera/index.js",
+    "./audio": "./src/audio/index.js",
+    "./ui": "./src/ui/index.js",
+    "./world": "./src/world/index.js",
+    "./tools/*": "./tools/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "tools",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5191",
+    "test": "node test/car-sim.mjs",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "game-engine",
+    "threejs",
+    "webgl2",
+    "browser",
+    "driving",
+    "physics",
+    "procedural",
+    "openstreetmap"
+  ],
+  "peerDependencies": {
+    "three": ">=0.170"
+  },
+  "devDependencies": {
+    "three": "^0.180.0",
+    "vite": "^7.3.7"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

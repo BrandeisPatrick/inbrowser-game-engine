@@ -1,0 +1,23 @@
+[
+  {"role": "brick_red", "id": "red_bricks_04"},
+  {"role": "brick_painted", "id": "whitewashed_brick"},
+  {"role": "brick_dark", "id": "brick_wall_08"},
+  {"role": "concrete_panel", "id": "concrete_wall_004"},
+  {"role": "concrete_rough", "id": "concrete_wall_008"},
+  {"role": "stucco_a", "id": "beige_wall_002"},
+  {"role": "stucco_b", "id": "white_stucco"},
+  {"role": "granite", "id": "granite_tile_03"},
+  {"role": "wood_siding", "id": "brown_planks_05"},
+  {"role": "metal_corrugated", "id": "corrugated_iron"},
+  {"role": "roof_slate", "id": "roof_slates_02"},
+  {"role": "roof_tar", "id": "bitumen"},
+  {"role": "asphalt_a", "id": "asphalt_02"},
+  {"role": "asphalt_b", "id": "clean_asphalt"},
+  {"role": "sidewalk", "id": "concrete_pavement"},
+  {"role": "grass", "id": "leafy_grass"},
+  {"role": "dirt", "id": "brown_mud_dry"},
+  {"role": "rock", "id": "rock_boulder_dry"},
+  {"role": "dry_grass", "id": "withered_grass"},
+  {"role": "grass_aerial", "id": "aerial_grass_rock"},
+  {"role": "terrain_aerial", "id": "rocky_terrain_02"}
+]
