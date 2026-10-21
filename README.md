@@ -1,7 +1,7 @@
 # inbrowser-game-engine
 
 Reusable browser game engine on Three.js / WebGL2, extracted from the Roadster flying-car game
-([flying-tesla](https://github.com/BrandeisPatrick/flying-tesla), which embeds this repository as its `engine/`
+([roadster](https://github.com/BrandeisPatrick/roadster), which embeds this repository as its `engine/`
 submodule). Design notes, measurements and the record of decisions: [ENGINE.md](ENGINE.md). Layers: core, render,
 physics, world, input, camera, audio, ui. Published as the npm package `@vibe/engine` (MIT); games import it as a
 normal package:
@@ -12,7 +12,7 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
 ```
 
 ## Install
-- As a git submodule of a game (what flying-tesla does): `git submodule add https://github.com/BrandeisPatrick/inbrowser-game-engine.git engine`,
+- As a git submodule of a game (what roadster does): `git submodule add https://github.com/BrandeisPatrick/inbrowser-game-engine.git engine`,
   list `engine` in the game's `workspaces`, and `npm install` links `node_modules/@vibe/engine -> engine`.
 - From git: `npm install github:BrandeisPatrick/inbrowser-game-engine` (pure ES module source, no build step).
 - Standalone: `npm install`, then `npm run dev` serves the Canyon Run sample at http://localhost:5190, `npm test`

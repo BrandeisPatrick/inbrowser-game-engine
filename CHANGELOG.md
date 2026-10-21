@@ -3,7 +3,7 @@
 ## 0.3.1 — 2026-10-21
 - Standalone repository (`inbrowser-game-engine`): the Canyon Run sample, `test/car-sim.mjs` and ENGINE.md moved in
   from the game; `npm run dev` / `npm run build` serve and build the sample, `npm test` runs the physics checks.
-  The game ([flying-tesla](https://github.com/BrandeisPatrick/flying-tesla)) embeds this repository as a submodule.
+  The game ([roadster](https://github.com/BrandeisPatrick/roadster)) embeds this repository as a submodule.
 
 ## 0.3.0 — 2026-10-19
 - Physics: `VehicleController` is a sprung body — per-wheel spring / damper / anti-roll suspension with bump stops, body

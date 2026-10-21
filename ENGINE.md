@@ -1,8 +1,8 @@
 # Browser game engine — extracted from Roadster
 
 > This document moved with the engine into its own repository (`inbrowser-game-engine`, npm package `@vibe/engine`).
-> Paths written as `engine/src/...` are relative to a game that embeds the engine as `engine/` (flying-tesla does);
-> here they are `src/...`. Plain `src/`, `dev/` and `tools/` paths refer to the flying-tesla game, `samples/canyon-run`
+> Paths written as `engine/src/...` are relative to a game that embeds the engine as `engine/` (roadster does);
+> here they are `src/...`. Plain `src/`, `dev/` and `tools/` paths refer to the roadster game, `samples/canyon-run`
 > and `test/car-sim.mjs` live here.
 
 Goal: turn the systems built for the flying-car game into a reusable, optimised engine for
