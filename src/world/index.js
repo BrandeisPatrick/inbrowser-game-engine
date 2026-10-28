@@ -28,7 +28,7 @@ export { Waterfront, createGroundMaterial, bakeLandClass, buildFarLand, shoreTex
 export { Boats, ferryGeometry, shipGeometry, sailboatGeometry, fishingBoatGeometry, launchGeometry, createBoatMaterial } from './Boats.js';
 export { hashStr, signedArea, pointInRing, pointInPoly, ringBounds, centroid, sanitizeRing, polylineLength, RingIndex } from './geom.js';
 // helpers for big static worlds (tiled culling, per-pass shadow casters, real-light pools)
-export { chunkGeometry, chunkMesh, replaceWithChunks, chunkStats } from './MeshChunker.js';
+export { chunkGeometry, chunkMesh, replaceWithChunks, chunkStats, localizeMeshOrigin } from './MeshChunker.js';
 export { shadowCount, shadowDrawRange, skipShadowPasses, shadowFrustum, NEAR_SHADOW_LAYER } from './ShadowPasses.js';
 export { NearestLights } from './NearestLights.js';
 export { clamp } from './geom.js';

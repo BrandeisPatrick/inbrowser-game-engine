@@ -2,8 +2,9 @@
 // (sRGB, alpha, tint / vertex colour baked) and an object-space normal atlas, then draw thousands of instances
 // as camera-facing quads that pick and blend the two nearest baked views per elevation ring (lit with the
 // baked normals by a patched MeshStandardMaterial). Baking uses a short-lived offscreen WebGL context so it
-// never touches the game renderer's state; 2x supersampled, box-filtered on the CPU, transparent texels
-// dilated, mipmapped with coverage-preserving alpha.
+// never touches the game renderer's state; 2x supersampled, box-filtered on the GPU (alpha-weighted), transparent
+// texels dilated, mipmapped with coverage-preserving alpha. The atlas is texSize wide and only as many rows as the
+// cells need (a power of two), so the CPU post-processing and the texture memory scale with the model count.
 //
 //   const baked = bakeImpostors([meshA, { geometry, map, center, radius }], { rings: DEFAULT_RINGS });
 //   const field = new ImpostorBatch(baked, { capacity: 5000, fade: { start: 150, end: 185 } });
@@ -16,10 +17,13 @@
 //   bakeImpostors(models, opts) -> { albedo, normal, layout: { cols, cellU, cellV, pad, views, rings }, models } | null
 //     models: THREE.Mesh | { geometry|geo, center?, radius?, map?, color? }
 //     opts: rings, cellPx (170), texSize (2048), cols (texSize / cellPx), ss (2), map (Texture or mip levels [{data,width,height}]
-//           shared by all models), alphaTest (0.5), normals (true), label ('impostors'), name ('impostor'), failNote
+//           shared by all models), alphaTest (0.5), normals (true), label ('impostors'), name ('impostor'), failNote,
+//           timing (an object that receives the phase times in ms: context, render, downsample, post, total;
+//           they are also printed with the console line)
 //   createImpostorMaterial(baked, { viewPos, fade, color, roughness, metalness, envMapIntensity, alphaToCoverage })
 //   ImpostorBatch(baked, { capacity, viewPos, fade, color, material }) — mesh, setInstance, setColor, count, update
 import * as THREE from 'three';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { buildMipChain, dataTextureFromMips, fillTransparent, dilateRGB } from './MipChain.js';
 import { GLSL_IGN } from './MaterialPatches.js';
 
@@ -70,6 +74,25 @@ void main() {
 const BAKE_NORMAL_FS = BAKE_COMMON_FS + /* glsl */`
 void main() { vec4 t = bakeTexel(); gl_FragColor = vec4( normalize( vN ) * 0.5 + 0.5, 1.0 ); }`;
 
+// K x K box filter of a supersampled row target: alpha-weighted colour mean, mean alpha, uEmpty where nothing was drawn
+const DOWN_VS = /* glsl */`
+void main() { gl_Position = vec4( position.xy, 0.0, 1.0 ); }`;
+const DOWN_FS = /* glsl */`
+uniform sampler2D tSrc;
+uniform vec3 uEmpty;
+void main() {
+	ivec2 o = ivec2( gl_FragCoord.xy ) * K;
+	vec4 acc = vec4( 0.0 );
+	for ( int j = 0; j < K; j ++ ) for ( int i = 0; i < K; i ++ ) { vec4 c = texelFetch( tSrc, o + ivec2( i, j ), 0 ); acc += vec4( c.rgb * c.a, c.a ); }
+	gl_FragColor = acc.a > 0.0 ? vec4( acc.rgb / acc.a, acc.a / float( K * K ) ) : vec4( uEmpty, 0.0 );
+}`;
+// (three compiles WebGL2 shaders as GLSL ES 3.00 with its gl_FragColor alias, so texelFetch is available as is)
+const downsampleMaterial = (k, empty) => new THREE.ShaderMaterial({
+  vertexShader: DOWN_VS, fragmentShader: DOWN_FS, defines: { K: k },
+  uniforms: { tSrc: { value: null }, uEmpty: { value: new THREE.Vector3(empty[0], empty[1], empty[2]) } },
+  depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+});
+
 function normModel(m) {
   const mesh = m && m.isMesh ? m : null;
   const geo = mesh ? mesh.geometry : m.geometry || m.geo;
@@ -89,7 +112,7 @@ function normModel(m) {
  * Throws only when the atlas cannot hold models x views cells.
  */
 export function bakeImpostors(models, o = {}) {
-  if (typeof document === 'undefined') return null;
+  if (typeof document === 'undefined' || typeof WebGL2RenderingContext === 'undefined') return null; // headless: no bake
   const rings = o.rings || DEFAULT_RINGS, views = impostorViews(rings), VIEWS = views.length;
   const cellPx = o.cellPx ?? 170, texSize = o.texSize ?? 2048, ss = o.ss ?? 2;
   const cols = o.cols ?? Math.floor(texSize / cellPx);
@@ -100,11 +123,13 @@ export function bakeImpostors(models, o = {}) {
   if (rows * cellPx > texSize || cols * cellPx > texSize) throw new Error('impostor atlas too small');
   let r = null;
   const t0 = performance.now();
+  const T = o.timing || {}, tm = (k, t) => { T[k] = (T[k] || 0) + (performance.now() - t); }; // phase times (ms), always collected: a few clock reads
   try {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 8;
     r = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true, powerPreference: 'high-performance' });
     r.setPixelRatio(1);
+    tm('context', t0);
     r.autoClear = false; // cells share one row target; clear once per row
     const own = [];
     const shared = Array.isArray(o.map) ? (own.push(dataTextureFromMips(o.map, THREE.SRGBColorSpace)), own[0]) : o.map || null; // own Texture object for this context
@@ -137,14 +162,26 @@ export function bakeImpostors(models, o = {}) {
     const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
     const cpx = cellPx * ss, rowW = cols * cpx;
     const rt = new THREE.WebGLRenderTarget(rowW, cpx, { depthBuffer: true, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-    const buf = new Uint8Array(rowW * cpx * 4);
-    const W = texSize, NW = texSize >> 1;
+    // atlas: texSize wide, as many rows as the cells need (power of two; the full square used to be processed)
+    const W = texSize, usedH = rows * cellPx;
+    let H = 1; while (H < usedH) H <<= 1; if (H > texSize) H = texSize;
+    const NW = W >> 1, NH = H >> 1;
     const withNormals = o.normals !== false;
-    const albedo = new Uint8Array(W * W * 4), normal = withNormals ? new Uint8Array(NW * NW * 4) : null;
+    const albedo = new Uint8Array(W * H * 4), normal = withNormals ? new Uint8Array(NW * NH * 4) : null;
     const ncell = cellPx >> 1;
+    // the supersampled row is box-filtered on the GPU into a 1x row (albedo: ss x ss -> cellPx; normals: 2ss x 2ss
+    // -> cellPx / 2 for the half-size normal atlas) and read back at that size: a quarter of the bytes, no CPU filter
+    const lowOpts = { depthBuffer: false, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter };
+    const lowA = new THREE.WebGLRenderTarget(cols * cellPx, cellPx, lowOpts), lowN = withNormals ? new THREE.WebGLRenderTarget(cols * ncell, ncell, lowOpts) : null;
+    const bufA = new Uint8Array(cols * cellPx * cellPx * 4), bufN = withNormals ? new Uint8Array(cols * ncell * ncell * 4) : null;
+    const downA = downsampleMaterial(ss, [0, 0, 0]), downN = withNormals ? downsampleMaterial(ss * 2, [0.5, 1, 0.5]) : null;
+    const quad = new FullScreenQuad(downA);
     r.setClearColor(0x000000, 0);
     for (let pass = 0; pass < (withNormals ? 2 : 1); pass++) {
+      const low = pass === 0 ? lowA : lowN, lowBuf = pass === 0 ? bufA : bufN, down = pass === 0 ? downA : downN;
+      const cell = pass === 0 ? cellPx : ncell, atlas = pass === 0 ? albedo : normal, AW = pass === 0 ? W : NW, lw = cols * cell;
       for (let row = 0; row < rows; row++) {
+        const tr = performance.now();
         rt.viewport.set(0, 0, rowW, cpx);
         r.setRenderTarget(rt);
         r.clear(true, true, false);
@@ -165,38 +202,21 @@ export function bakeImpostors(models, o = {}) {
           r.setRenderTarget(rt);
           r.render(scene, cam);
         }
-        r.readRenderTargetPixels(rt, 0, 0, rowW, cpx, buf);
-        // box-downsample each cell into the atlas (albedo: ss x ss; normals: 2ss x 2ss, half-res atlas)
-        for (let c = 0; c < cols; c++) {
-          if (row * cols + c >= total) break;
-          if (pass === 0) {
-            for (let y = 0; y < cellPx; y++) for (let x = 0; x < cellPx; x++) {
-              let sr = 0, sg = 0, sb = 0, sa = 0;
-              for (let j = 0; j < ss; j++) for (let i = 0; i < ss; i++) {
-                const k = ((y * ss + j) * rowW + c * cpx + x * ss + i) * 4, a = buf[k + 3];
-                sr += buf[k] * a; sg += buf[k + 1] * a; sb += buf[k + 2] * a; sa += a;
-              }
-              const off = ((row * cellPx + y) * W + c * cellPx + x) * 4;
-              if (sa > 0) { albedo[off] = sr / sa; albedo[off + 1] = sg / sa; albedo[off + 2] = sb / sa; }
-              albedo[off + 3] = sa / (ss * ss);
-            }
-          } else {
-            const f = ss * 2;
-            for (let y = 0; y < ncell; y++) for (let x = 0; x < ncell; x++) {
-              let sr = 0, sg = 0, sb = 0, sa = 0;
-              for (let j = 0; j < f; j++) for (let i = 0; i < f; i++) {
-                const k = ((y * f + j) * rowW + c * cpx + x * f + i) * 4, a = buf[k + 3];
-                sr += buf[k] * a; sg += buf[k + 1] * a; sb += buf[k + 2] * a; sa += a;
-              }
-              const off = ((row * ncell + y) * NW + c * ncell + x) * 4;
-              if (sa > 0) { normal[off] = sr / sa; normal[off + 1] = sg / sa; normal[off + 2] = sb / sa; } else { normal[off] = 128; normal[off + 1] = 255; normal[off + 2] = 128; }
-              normal[off + 3] = sa / (f * f);
-            }
-          }
-        }
+        down.uniforms.tSrc.value = rt.texture;
+        quad.material = down;
+        r.setRenderTarget(low);
+        quad.render(r);
+        r.readRenderTargetPixels(low, 0, 0, lw, cell, lowBuf);
+        tm('render', tr);
+        const td = performance.now();
+        // the filtered row goes straight into the atlas rows (cells past the last model stay blank)
+        const span = Math.min(cols, total - row * cols) * cell * 4;
+        for (let y = 0; y < cell; y++) atlas.set(lowBuf.subarray(y * lw * 4, y * lw * 4 + span), (row * cell + y) * AW * 4);
+        tm('downsample', td);
       }
     }
     // dilate colours / normals into transparent texels (per cell), then mip chains
+    const tp = performance.now();
     const regA = [], regN = [];
     for (let idx = 0; idx < total; idx++) {
       const c = idx % cols, row = Math.floor(idx / cols);
@@ -205,14 +225,17 @@ export function bakeImpostors(models, o = {}) {
       regA.push({ x: c * cellPx, y: row * cellPx, w: cellPx, h: cellPx, cov: true });
       regN.push({ x: c * ncell, y: row * ncell, w: ncell, h: ncell, cov: false });
     }
-    const albedoTex = dataTextureFromMips(buildMipChain(albedo, W, W, regA, true), THREE.SRGBColorSpace);
-    const normalTex = withNormals ? dataTextureFromMips(buildMipChain(normal, NW, NW, regN, false), THREE.NoColorSpace) : null;
+    const albedoTex = dataTextureFromMips(buildMipChain(albedo, W, H, regA, true), THREE.SRGBColorSpace);
+    const normalTex = withNormals ? dataTextureFromMips(buildMipChain(normal, NW, NH, regN, false), THREE.NoColorSpace) : null;
     albedoTex.name = `${name}Albedo`; if (normalTex) normalTex.name = `${name}Normal`;
-    rt.dispose(); for (const p of matCache.values()) p.forEach((m) => m.dispose()); geos.forEach((g) => g.dispose()); own.forEach((t) => t.dispose());
-    console.info(`[${label}] impostors baked: ${total} views in ${Math.round(performance.now() - t0)} ms`);
+    tm('post', tp);
+    rt.dispose(); lowA.dispose(); if (lowN) lowN.dispose(); downA.dispose(); if (downN) downN.dispose(); quad.dispose();
+    for (const p of matCache.values()) p.forEach((m) => m.dispose()); geos.forEach((g) => g.dispose()); own.forEach((t) => t.dispose());
+    tm('total', t0);
+    console.info(`[${label}] impostors baked: ${total} views in ${Math.round(performance.now() - t0)} ms (context ${Math.round(T.context)}, render ${Math.round(T.render)}, downsample ${Math.round(T.downsample)}, post ${Math.round(T.post)})`);
     return {
       albedo: albedoTex, normal: normalTex,
-      layout: { cols, cellU: cellPx / W, cellV: cellPx / W, pad: 1.5 / cellPx, views: VIEWS, rings: rings.map((q) => ({ el: q.el, n: q.n })) },
+      layout: { cols, cellU: cellPx / W, cellV: cellPx / H, pad: 1.5 / cellPx, views: VIEWS, rings: rings.map((q) => ({ el: q.el, n: q.n })) },
       models: M.map((m) => ({ cx: m.center.x, cy: m.center.y, cz: m.center.z, r: m.radius })),
     };
   } catch (e) {

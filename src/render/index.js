@@ -6,6 +6,11 @@ export { AOPass } from './passes/AOPass.js';
 export { BloomPass } from './passes/BloomPass.js';
 export { ExposurePass } from './passes/ExposurePass.js';
 export { installCascadeShadowChunk } from './shadowCascade.js';
+// opt-in 'fast' directional shadow kernel (5 hardware-compare taps; Atmosphere.setShadowKernel wires it for the sun)
+export {
+  SHADOW_KERNELS, FAST_SHADOW_DEFINE, installFastShadowChunk, createShadowDepthTexture, attachShadowDepth, setFastShadowMaps,
+  setMaterialShadowKernel, applyShadowKernel,
+} from './shadowKernel.js';
 export { makeCloudTexture, sampleCloud, makeFlareTextures } from './skyTextures.js';
 export {
   textureBase, basisPath, loadTextureManifest, loadTextureSet, makeTextureArray, proceduralPbr, TextureSets, ktx2Support,

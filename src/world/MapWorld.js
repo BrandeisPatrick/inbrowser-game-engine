@@ -41,7 +41,7 @@ import { mulberry32, signedArea, sanitizeRing, pointInRing, ringBounds, hashStr,
 import { Traffic } from './Traffic.js';
 import { createWaterMaterial, makeWaterNormalMap } from './Water.js';
 import { Waterfront, createGroundMaterial } from './Shore.js';
-import { replaceWithChunks } from './MeshChunker.js';
+import { replaceWithChunks, localizeMeshOrigin } from './MeshChunker.js';
 
 export const DEFAULT_WATER_LEVEL = -0.6;
 /** Asphalt ribbons are drawn this far above the ground mesh (RoadNetwork yBase); the physics ground follows. */
@@ -92,6 +92,9 @@ function streamingOptions(o) {
   try { const q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null; if (q && q.has('nostream') && q.get('nostream') !== '0') return null; } catch { /* no location */ }
   return { ...DEFAULT_STREAMING, ...(o.streaming && typeof o.streaming === 'object' ? o.streaming : {}) };
 }
+/** Building shell meshes that get a local origin at the tiling step (Buildings.js GeoBuf.build names). */
+const BUILDING_SHELL_NAMES = new Set(['buildings', 'buildings-far', 'buildings-near-walls']);
+
 const geoBytes = (g) => { let b = 0; if (!g) return 0; for (const k in g.attributes) b += g.attributes[k].array.byteLength; if (g.index) b += g.index.array.byteLength; return b; };
 /** Free the GPU buffers of a streamed object tree (materials are shared; window units share their unit attributes). */
 function disposeStreamed(obj) {
@@ -727,6 +730,8 @@ diffuseColor.rgb *= (0.85 + 0.3 * texture2D(map, vMapUv * 0.071 + 0.13).g) * mix
   _tileAttach(t, out, byCell) {
     const lodDist = this._bopts.lodDist;
     t.objs = []; t.lods = new Map(); t.detailedByCell = byCell;
+    // tiles attached after load get their local origins here (load-time tiles: _chunkStatic, after the plugin hooks)
+    if (this.loaded) { if (out.base) this._localizeBuildings(out.base); for (const e of out.cells) if (e.far) this._localizeBuildings(e.far); }
     if (out.base) { out.base.userData.streamed = true; this.group.add(out.base); t.objs.push(out.base); }
     for (const e of out.cells) {
       // as BuildingBuilder.build: a THREE.LOD at the detail cell centre; far level now, near level from the detail tile
@@ -766,6 +771,7 @@ diffuseColor.rgb *= (0.85 + 0.3 * texture2D(map, vMapUv * 0.071 + 0.13).g) * mix
         const L = p.lods && p.lods.get(c.cellKey);
         if (!e) return;
         if (!L) { disposeStreamed(e.near); return; }
+        this._localizeBuildings(e.near);
         L.lod.addLevel(e.near, 0); c.near = e.near; c.lod = L;
       },
       discard: () => { if (e) disposeStreamed(e.near); },
@@ -948,8 +954,18 @@ diffuseColor.rgb *= (0.85 + 0.3 * texture2D(map, vMapUv * 0.071 + 0.13).g) * mix
       if (typeof pl.chunk !== 'function' || this._failed.has(pl) || (pl.name && !this[pl.name])) continue;
       for (const e of pl.chunk(this) || []) if (e && e.mesh && e.cell) tiles += replaceWithChunks(e.mesh, { cell: e.cell }).children.length || 1;
     }
+    // building shells (base chunks / tiles and the LOD far + near walls) move to their own XZ centre: the renderer's
+    // front-to-back sort of opaque objects then draws the nearest shells first instead of in creation order (every
+    // merged mesh used to sit at the origin); plugin hooks that edit merged geometry by world coordinates ran above
+    this._localizeBuildings(this.group);
     this._chunkTiles = tiles;
     this._chunkMs = Math.round(performance.now() - t0);
+  }
+
+  /** Give the building shell meshes under root a local origin (MeshChunker.localizeMeshOrigin). */
+  _localizeBuildings(root) {
+    if (!root) return;
+    root.traverse((m) => { if (m.isMesh && BUILDING_SHELL_NAMES.has(m.name)) localizeMeshOrigin(m); });
   }
 
   // ================================================================== runtime

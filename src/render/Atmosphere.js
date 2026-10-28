@@ -7,13 +7,14 @@
 //
 // API
 //   const atmo = new Atmosphere({ scene, renderer, camera?, timeOfDay: 'golden' | hours,
-//                                 shadows: { cascades: 2, near: 45, far: [260, 420, 650] }, ...tunings });
+//                                 shadows: { cascades: 2, near: 45, far: [260, 420, 650], kernel: 'pcf' }, ...tunings });
 //   (legacy: new Atmosphere(scene, renderer, opts) followed by atmo.build())
 //   atmo.update(cameraPos, dt?)    per frame: sky follows the camera, clouds drift, cascades + flare follow
 //   atmo.setTimeOfDay(hoursOrPreset) / atmo.setTime(hours)
 //   atmo.darkness (0 day .. 1 night), atmo.windowGlow (night emissive factor), atmo.sunDir, atmo.sunColor,
 //   atmo.fogColor, atmo.fogParams (post fog), atmo.skyCube, atmo.version (bumps on every time change)
 //   atmo.setFogMode('scene' | 'post'), atmo.renderFlare(renderer, camera), atmo.setFlareScale(bufferHeight)
+//   atmo.setShadowKernel('pcf' | 'fast', root?)  sun shadow filter, switchable at runtime; atmo.shadowKernel
 // Tunings (constructor options; defaults are the Roadster values): sun (solar model), looks (keyframes),
 // skyGain, sunIntensity, moon, cloudWind, fog, maxCasterHeight, flare, timePresets.
 import * as THREE from 'three';
@@ -22,6 +23,7 @@ import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { clamp, smoothstep } from './noise.js';
 import { makeCloudTexture, sampleCloud, makeFlareTextures } from './skyTextures.js';
 import { installCascadeShadowChunk } from './shadowCascade.js';
+import { installFastShadowChunk, createShadowDepthTexture, attachShadowDepth, setFastShadowMaps, applyShadowKernel } from './shadowKernel.js';
 
 const DEG = Math.PI / 180;
 export const TIME_PRESETS = { dawn: 7.25, morning: 9.5, noon: 13, afternoon: 15.5, golden: 17.55, sunset: 18.45, dusk: 18.95, night: 22 };
@@ -264,16 +266,19 @@ const DEFAULT_SHADOWS = {
   nearRadius: 2.0, farRadius: 1.4,
   lead: 0.45, farLead: 0.55, // boxes lead the camera's view direction by this fraction of their half size
   farMaxY: 40,            // far box centre height cap (m)
+  kernel: 'pcf',          // 'fast': 5 hardware-compare taps per lookup instead of three's 17 (setShadowKernel)
 };
 
 export class Atmosphere {
   /**
    * @param {object|THREE.Scene} o  options object ({ scene, renderer, ... }), or legacy (scene, renderer, opts)
    * @param {THREE.Scene} o.scene
-   * @param {THREE.WebGLRenderer} o.renderer
+   * @param {THREE.WebGLRenderer|null} o.renderer  (null: headless - lights, sun direction and darkness only; no
+   *        environment map, sky cube, horizon sampling or lens flare)
    * @param {THREE.Camera} [o.camera]  cascades lead its view direction; lens flare
    * @param {number|string} [o.timeOfDay='golden']  hours 0..24 or a preset name (timePresets)
-   * @param {object} [o.shadows]  { cascades: 2|1, near (m), far (m or [m by height step]), ... } see DEFAULT_SHADOWS
+   * @param {object} [o.shadows]  { cascades: 2|1, near (m), far (m or [m by height step]), kernel: 'pcf'|'fast', ... }
+   *        see DEFAULT_SHADOWS
    * @param {boolean} [o.build]  build immediately (default true for the options form, false for the legacy form)
    */
   constructor(o = {}, legacyRenderer, legacyOpts) {
@@ -286,6 +291,7 @@ export class Atmosphere {
     const sh = this.shadowOpts = { ...DEFAULT_SHADOWS, ...(opts.shadows || {}) };
     if (opts.shadowNearHalf != null) sh.near = opts.shadowNearHalf;
     this.cascaded = sh.cascades > 1 && CASCADES;
+    this.shadowKernel = 'pcf'; // kernel in effect; build() selects sh.kernel through setShadowKernel
     const t = opts.timeOfDay ?? 'golden';
     this.hours = typeof t === 'number' ? t : this.timePresets[t] ?? this.timePresets.golden ?? TIME_PRESETS.golden;
     this.skyGain = opts.skyGain ?? 0.38;
@@ -318,6 +324,7 @@ export class Atmosphere {
     this._farDirty = true;
     this._lastT = 0;
     this._clock = 0;
+    this._fastDepth = null; this._fastMaps = null; this._onChildAdded = null; // 'fast' shadow kernel state
     this.flareScale = 1;
     if (opts.build ?? !legacy) this.build();
   }
@@ -371,7 +378,7 @@ export class Atmosphere {
     this.fogPost = new THREE.FogExp2(0x8090a0, 0);
     scene.fog = this.fogMode === 'scene' ? this.fog : this.fogPost;
 
-    this.pmrem = new THREE.PMREMGenerator(renderer);
+    this.pmrem = renderer ? new THREE.PMREMGenerator(renderer) : null; // no renderer (headless): no environment map
     this.envScene = new THREE.Scene();
     this.envSky = patchSky(new Sky(), ct);
     this.envSky.scale.setScalar(500);
@@ -382,7 +389,8 @@ export class Atmosphere {
     this.cubeCam = new THREE.CubeCamera(0.1, 1000, this.skyCubeRT);
     this.envScene.add(this.cubeCam);
 
-    if (this.flareSpec) this._buildFlare();
+    if (this.flareSpec && renderer && typeof document !== 'undefined') this._buildFlare();
+    if (sh.kernel && sh.kernel !== 'pcf') this.setShadowKernel(sh.kernel); // the world added later follows ('childadded')
     this.setTime(this.hours);
     return this;
   }
@@ -402,6 +410,71 @@ export class Atmosphere {
     if (!this.fogPost) this.fogPost = new THREE.FogExp2(0x8090a0, 0);
     if (this.horizon) this.fogPost.color.copy(this.horizon);
     if (this.scene) this.scene.fog = this.fogMode === 'scene' ? this.fog : this.fogPost;
+  }
+
+  /**
+   * Sun shadow filter: 'pcf' (three's 17-tap PCF, the default) or 'fast' (5 hardware-compare taps on a depth texture
+   * under each cascade map, shadowKernel.js). Switches every lit material under `root` (default: this scene) through
+   * its ENGINE_SHADOW_FAST define, so it also works at runtime for A/B: the first switch compiles the other program of
+   * each material, later switches reuse both. While 'fast' is on, objects added to the scene follow ('childadded');
+   * a mesh added under an object already in the scene, or a material swapped onto a mesh, keeps its kernel until the
+   * next call. 'fast' needs a renderer, PCFShadowMap and the sun (+ far cascade) as the scene's only shadow-casting
+   * directional lights; otherwise it warns and selects 'pcf'. Returns the number of materials switched.
+   */
+  setShadowKernel(kernel, root = this.scene) {
+    if (kernel !== 'pcf' && kernel !== 'fast') { console.warn(`[Atmosphere] unknown shadow kernel '${kernel}' ('pcf' | 'fast')`); return 0; }
+    if (kernel === 'fast' && !this._fastShadowsOk()) kernel = 'pcf';
+    this.shadowKernel = kernel;
+    const s = this.scene;
+    if (kernel === 'fast') {
+      this._syncFastShadows(); // depth textures on the maps + the sampler array, before any material compiles 'fast'
+      if (!this._onChildAdded && s) {
+        this._onChildAdded = (e) => applyShadowKernel(e.child, this.shadowKernel);
+        s.addEventListener('childadded', this._onChildAdded);
+      }
+    } else if (this._onChildAdded) {
+      s.removeEventListener('childadded', this._onChildAdded);
+      this._onChildAdded = null;
+    }
+    return applyShadowKernel(root, kernel);
+  }
+
+  _fastShadowsOk() {
+    const r = this.renderer;
+    let why = '';
+    if (!r) why = 'no renderer';
+    else if (!this.sun) why = 'not built yet';
+    else if (r.shadowMap.type !== THREE.PCFShadowMap) why = 'it replaces PCFShadowMap only';
+    else if (!installFastShadowChunk()) why = 'three.js shadow chunks changed';
+    else {
+      // the sampler array mirrors three's directional shadow order, which this class only knows for its own lights
+      this.scene.traverse((o) => {
+        if (o.isDirectionalLight && o.castShadow && o !== this.sun && o !== this.sunFar) why = `another shadow-casting directional light '${o.name}'`;
+      });
+    }
+    if (why) console.warn(`[Atmosphere] fast shadow kernel unavailable (${why}), using 'pcf'`);
+    return !why;
+  }
+
+  // While 'fast' (per frame from update): each shadow-casting cascade keeps its depth texture (three re-creates a map
+  // without one after `shadow.map = null`) and the kernel's sampler array lists them in three's order, i.e. shadow
+  // casters in scene order: sun, then far cascade. Allocation-free unless a map has to be re-created.
+  _syncFastShadows() {
+    if (this.renderer.shadowMap.type !== THREE.PCFShadowMap) return; // VSM / basic maps are three's alone
+    if (!this._fastDepth) {
+      const rev = this.renderer.state?.buffers?.depth?.getReversed?.() === true;
+      this._fastDepth = [createShadowDepthTexture(rev), createShadowDepthTexture(rev)];
+      this._fastDepth[0].name = 'sun.shadowDepth'; this._fastDepth[1].name = 'sunFarCascade.shadowDepth';
+      this._fastMaps = [null, null];
+    }
+    let n = 0;
+    for (let i = 0; i < 2; i++) {
+      const light = i === 0 ? this.sun : this.sunFar;
+      if (!light || !light.castShadow) continue;
+      attachShadowDepth(light, this._fastDepth[i]);
+      this._fastMaps[n++] = this._fastDepth[i];
+    }
+    setFastShadowMaps(this._fastMaps, n);
   }
 
   _setBox(light, half) {
@@ -503,22 +576,24 @@ export class Atmosphere {
     this.envSky.material.uniforms.uStars.value = 0;
 
     // environment from the sky (with clouds, without stars)
-    if (this.envRT) this.envRT.dispose();
-    this.envRT = this.pmrem.fromScene(this.envScene, 0, 0.1, 1000);
-    this.scene.environment = this.envRT.texture;
-    this.scene.environmentIntensity = L.env;
+    if (this.pmrem) {
+      if (this.envRT) this.envRT.dispose();
+      this.envRT = this.pmrem.fromScene(this.envScene, 0, 0.1, 1000);
+      this.scene.environment = this.envRT.texture;
+      this.scene.environmentIntensity = L.env;
+    }
 
     // clean sky radiance (no disc, no clouds) for fog colour + horizon sampling
     const eu = this.envSky.material.uniforms;
     eu.uDisc.value = 0; eu.uClouds.value = 0;
-    this.cubeCam.update(this.renderer, this.envScene);
+    if (this.renderer) this.cubeCam.update(this.renderer, this.envScene);
     const hor = this.sampleHorizon();
     eu.uDisc.value = 1; eu.uClouds.value = 1;
     this.horizon = hor;
 
     // scene fog (no-post path): tone-mapped horizon colour (three applies fog after tone mapping)
-    const exp = this.renderer.toneMappingExposure ?? 1;
-    const tm = this.renderer.toneMapping === THREE.NoToneMapping ? new THREE.Color(clamp(hor.r * exp, 0, 1), clamp(hor.g * exp, 0, 1), clamp(hor.b * exp, 0, 1)) : acesFilmic(hor, exp);
+    const exp = (this.renderer && this.renderer.toneMappingExposure) ?? 1;
+    const tm = this.renderer && this.renderer.toneMapping === THREE.NoToneMapping ? new THREE.Color(clamp(hor.r * exp, 0, 1), clamp(hor.g * exp, 0, 1), clamp(hor.b * exp, 0, 1)) : acesFilmic(hor, exp);
     this.fog.color.copy(tm);
     this.fog.density = this.fogDensity[0] + this.fogDensity[1] * this.darkness;
     this.fogPost.color.copy(hor);
@@ -542,6 +617,7 @@ export class Atmosphere {
   sampleHorizon() {
     const r = this.renderer;
     const out = new THREE.Color(0.6, 0.65, 0.7);
+    if (!r) return out; // headless: a neutral horizon
     try {
       const S = 16;
       const rt = new THREE.WebGLRenderTarget(S, S, { type: THREE.FloatType, depthBuffer: false });
@@ -632,6 +708,7 @@ export class Atmosphere {
         this._farDirty = false;
       }
     }
+    if (this.shadowKernel === 'fast') this._syncFastShadows();
     this._updateFlare(cam);
   }
 
@@ -679,6 +756,7 @@ export class Atmosphere {
     const s = this.scene;
     for (const o of [this.sky, this.sun, this.sun && this.sun.target, this.sunFar, this.sunFar && this.sunFar.target, this.hemi]) if (o && s) s.remove(o);
     if (s && (s.fog === this.fog || s.fog === this.fogPost)) s.fog = null;
+    if (s && this._onChildAdded) { s.removeEventListener('childadded', this._onChildAdded); this._onChildAdded = null; } // materials keep their define
     if (s && this.envRT && s.environment === this.envRT.texture) s.environment = null;
     for (const o of [this.sky, this.envSky]) if (o) o.material.dispose();
     for (const l of [this.sun, this.sunFar]) if (l) l.dispose();

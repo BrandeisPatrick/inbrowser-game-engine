@@ -3,6 +3,11 @@
 // depth-aware blur. Because it reads the resolved scene depth, instanced meshes, alpha-tested foliage,
 // vertex-animated materials and depthWrite:false effects are all handled exactly as they were drawn.
 // Output: `aoTexture` (r = ao 0..1, g = linear view depth in metres), sampled by the final pass.
+// Size: resolutionScale of the drawing buffer, capped at maxPixels (default Infinity here; PostFX passes 0.8e6). GTAO costs per AO pixel, and a
+// 2x Retina buffer makes half resolution 1.5 MP (Canyon Run at 3024x1964: 2.7 ms; 0.92 MP at 2560x1440: 1.55 ms), so a
+// budget keeps the pass at one cost whatever the device pixel ratio. `upsample` ('linear' | 'depth') is how the final
+// pass samples aoTexture: below half resolution a bilinear tap leaves wider halos at silhouettes, the depth-aware
+// upsample does not. setResolution(scale, maxPixels) resizes at once; `compact` (see the setter) halves the traffic.
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GTAOShader, generateMagicSquareNoise } from 'three/addons/shaders/GTAOShader.js';
@@ -44,16 +49,21 @@ const BlurShader = {
 export class AOPass extends Pass {
   /**
    * @param {THREE.PerspectiveCamera} camera
-   * @param {object} [o] radius (m), thickness (m), samples, resolutionScale, fadeNear/fadeFar (m)
+   * @param {object} [o] radius (m), thickness (m), samples, resolutionScale, maxPixels, upsample ('linear' | 'depth'),
+   *   compact, fadeNear/fadeFar (m)
    */
   constructor(camera, o = {}) {
     super();
     this.needsSwap = false;
     this.camera = camera;
     this.scale = o.resolutionScale ?? 0.5;
+    this.maxPixels = o.maxPixels ?? Infinity;
+    this.upsample = o.upsample ?? 'linear'; // read by the final pass
     this.fadeNear = o.fadeNear ?? 140;
     this.fadeFar = o.fadeFar ?? 320;
-    const opt = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
+    this._compact = !!o.compact;
+    this._size = new THREE.Vector2(1, 1); // drawing-buffer size of the last setSize, for setResolution
+    const opt = { type: THREE.HalfFloatType, format: this._compact ? THREE.RGFormat : THREE.RGBAFormat, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
     this.rtA = new THREE.WebGLRenderTarget(1, 1, opt);
     this.rtB = new THREE.WebGLRenderTarget(1, 1, opt);
     this.rtA.texture.name = 'AO.a'; this.rtB.texture.name = 'AO.b';
@@ -108,10 +118,35 @@ export class AOPass extends Pass {
   get aoTexture() { return this.rtA.texture; }
 
   setSize(width, height) {
-    const w = Math.max(1, Math.round(width * this.scale)), h = Math.max(1, Math.round(height * this.scale));
+    this._size.set(width, height);
+    let w = Math.max(1, Math.round(width * this.scale)), h = Math.max(1, Math.round(height * this.scale));
+    if (w * h > this.maxPixels) { // over the budget: the largest uniform scale that fits, floored (never above it)
+      const s = Math.sqrt(this.maxPixels / (width * height));
+      w = Math.max(1, Math.floor(width * s)); h = Math.max(1, Math.floor(height * s));
+    }
     this.rtA.setSize(w, h); this.rtB.setSize(w, h);
     this.material.uniforms.resolution.value.set(w, h);
     this.blur.uniforms.uTexel.value.set(1 / w, 1 / h);
+  }
+
+  /** Runtime resize (console A/B): scale and / or maxPixels (null: no cap), applied to the current buffer size. */
+  setResolution(scale = this.scale, maxPixels = this.maxPixels) {
+    this.scale = scale;
+    this.maxPixels = maxPixels ?? Infinity;
+    this.setSize(this._size.x, this._size.y);
+  }
+
+  /**
+   * compact: RG16F targets (all the AO buffers hold: r = ao, g = depth) instead of RGBA16F, and a clear before each
+   * blur draw, so a tile-based GPU starts those passes from the clear instead of loading the target's previous
+   * contents (the blur overwrites every texel anyway). Same output, about half the AO buffer traffic; needs the
+   * float colour-buffer support the RGBA16F targets already need.
+   */
+  get compact() { return this._compact; }
+  set compact(v) {
+    if (!!v === this._compact) return;
+    this._compact = !!v;
+    for (const rt of [this.rtA, this.rtB]) { rt.texture.format = this._compact ? THREE.RGFormat : THREE.RGBAFormat; rt.dispose(); }
   }
 
   render(renderer, writeBuffer, readBuffer) {
@@ -133,12 +168,14 @@ export class AOPass extends Pass {
     this._quad.material = this.material;
     this._quad.render(renderer);
     // separable bilateral blur (5x5 footprint = the GTAO noise period)
-    const b = this.blur.uniforms;
+    const b = this.blur.uniforms, clr = this._compact;
     this._quad.material = this.blur;
     b.tAO.value = this.rtA.texture; b.uDir.value.set(1, 0);
-    renderer.setRenderTarget(this.rtB); this._quad.render(renderer);
+    renderer.setRenderTarget(this.rtB); if (clr) renderer.clear(true, false, false);
+    this._quad.render(renderer);
     b.tAO.value = this.rtB.texture; b.uDir.value.set(0, 1);
-    renderer.setRenderTarget(this.rtA); this._quad.render(renderer);
+    renderer.setRenderTarget(this.rtA); if (clr) renderer.clear(true, false, false);
+    this._quad.render(renderer);
 
     renderer.setClearColor(this._clear, ca);
     renderer.autoClear = ac;

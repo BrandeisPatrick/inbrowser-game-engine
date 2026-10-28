@@ -25,13 +25,12 @@ export function fillTransparent(d, W, rx, ry, rw, rh, thr = 12) {
     if (d[i + 3] < thr) { d[i] = mr; d[i + 1] = mg; d[i + 2] = mb; d[i + 3] = 0; }
   }
   // one dilation pass so bilinear filtering at the alpha edge only mixes leaf colours
+  const W4 = W * 4;
   for (let y = ry + 1; y < y1 - 1; y++) for (let x = rx + 1; x < x1 - 1; x++) {
     const i = (y * W + x) * 4;
     if (d[i + 3] !== 0) continue;
-    for (const o of [-4, 4, -W * 4, W * 4]) {
-      const j = i + o;
-      if (d[j + 3] > 127) { d[i] = d[j]; d[i + 1] = d[j + 1]; d[i + 2] = d[j + 2]; break; }
-    }
+    let j = i - 4;
+    if (d[j + 3] > 127 || d[(j = i + 4) + 3] > 127 || d[(j = i - W4) + 3] > 127 || d[(j = i + W4) + 3] > 127) { d[i] = d[j]; d[i + 1] = d[j + 1]; d[i + 2] = d[j + 2]; }
   }
 }
 
@@ -62,18 +61,11 @@ export function buildMipChain(data, W, H, regions = [], srgb = true) {
         const a0 = src[i0 + 3], a1 = src[i1 + 3], a2 = src[i2 + 3], a3 = src[i3 + 3];
         const as = a0 + a1 + a2 + a3;
         const o = (y * nw + x) * 4;
-        for (let c = 0; c < 3; c++) {
-          let v;
-          if (srgb) {
-            v = as > 0
-              ? (S2L[src[i0 + c]] * a0 + S2L[src[i1 + c]] * a1 + S2L[src[i2 + c]] * a2 + S2L[src[i3 + c]] * a3) / as
-              : (S2L[src[i0 + c]] + S2L[src[i1 + c]] + S2L[src[i2 + c]] + S2L[src[i3 + c]]) * 0.25;
-            dst[o + c] = L2S[Math.min(4095, (v * 4095 + 0.5) | 0)];
-          } else {
-            v = as > 0 ? (src[i0 + c] * a0 + src[i1 + c] * a1 + src[i2 + c] * a2 + src[i3 + c] * a3) / as : (src[i0 + c] + src[i1 + c] + src[i2 + c] + src[i3 + c]) * 0.25;
-            dst[o + c] = v + 0.5;
-          }
-        }
+        if (srgb) {
+          if (as > 0) for (let c = 0; c < 3; c++) dst[o + c] = L2S[Math.min(4095, (((S2L[src[i0 + c]] * a0 + S2L[src[i1 + c]] * a1 + S2L[src[i2 + c]] * a2 + S2L[src[i3 + c]] * a3) / as) * 4095 + 0.5) | 0)];
+          else for (let c = 0; c < 3; c++) dst[o + c] = L2S[Math.min(4095, (((S2L[src[i0 + c]] + S2L[src[i1 + c]] + S2L[src[i2 + c]] + S2L[src[i3 + c]]) * 0.25) * 4095 + 0.5) | 0)];
+        } else if (as > 0) for (let c = 0; c < 3; c++) dst[o + c] = (src[i0 + c] * a0 + src[i1 + c] * a1 + src[i2 + c] * a2 + src[i3 + c] * a3) / as + 0.5;
+        else for (let c = 0; c < 3; c++) dst[o + c] = (src[i0 + c] + src[i1 + c] + src[i2 + c] + src[i3 + c]) * 0.25 + 0.5;
         dst[o + 3] = (as + 2) >> 2;
       }
     }
@@ -116,11 +108,12 @@ export function dataTextureFromMips(levels, colorSpace) {
 
 /** Copy RGB from an opaque 4-neighbour into fully transparent texels (alpha becomes 1/255) inside a rect. */
 export function dilateRGB(d, W, rx, ry, rw, rh) {
-  const mark = [];
+  const mark = [], W4 = W * 4;
   for (let y = ry + 1; y < ry + rh - 1; y++) for (let x = rx + 1; x < rx + rw - 1; x++) {
     const i = (y * W + x) * 4;
     if (d[i + 3] > 0) continue;
-    for (const o of [-4, 4, -W * 4, W * 4]) { const j = i + o; if (d[j + 3] > 0) { mark.push(i, j); break; } }
+    let j = i - 4;
+    if (d[j + 3] > 0 || d[(j = i + 4) + 3] > 0 || d[(j = i - W4) + 3] > 0 || d[(j = i + W4) + 3] > 0) mark.push(i, j);
   }
   for (let k = 0; k < mark.length; k += 2) { const i = mark[k], j = mark[k + 1]; d[i] = d[j]; d[i + 1] = d[j + 1]; d[i + 2] = d[j + 2]; d[i + 3] = 1; }
 }

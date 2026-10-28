@@ -3,6 +3,8 @@
 // and points the same way as light 0, light 0's shadow lookup picks the near map inside the near box and
 // the far map (light 1) outside it, with a blend band and a fade at the far box edge. Light 1 adds no light.
 // Any other light setup compiles to the stock three.js code path.
+// Lookups keep the stock form getShadow( directionalShadowMap[ n ], ... ): the opt-in fast kernel (shadowKernel.js)
+// swaps the filter by overloading getShadow and renaming directionalShadowMap, so both kernels blend the same way.
 import * as THREE from 'three';
 
 let installed = null;

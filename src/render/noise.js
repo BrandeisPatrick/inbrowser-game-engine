@@ -29,10 +29,12 @@ export function pnoise(x, y, period, seed = 0) {
   const xi = Math.floor(x), yi = Math.floor(y);
   const xf = x - xi, yf = y - yi;
   const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
-  const m = (n) => ((n % period) + period) % period;
-  const x0 = m(xi), x1 = m(xi + 1), y0 = m(yi), y1 = m(yi + 1);
-  const a = hash2(x0 + seed * 131, y0), b = hash2(x1 + seed * 131, y0);
-  const c = hash2(x0 + seed * 131, y1), d = hash2(x1 + seed * 131, y1);
+  // lattice corners wrapped to the period (inline: this runs a few million times per procedural texture)
+  const x0 = ((xi % period) + period) % period, x1 = (((xi + 1) % period) + period) % period;
+  const y0 = ((yi % period) + period) % period, y1 = (((yi + 1) % period) + period) % period;
+  const sx = seed * 131;
+  const a = hash2(x0 + sx, y0), b = hash2(x1 + sx, y0);
+  const c = hash2(x0 + sx, y1), d = hash2(x1 + sx, y1);
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
 
