@@ -16,6 +16,14 @@ const SUITES = [
   { file: 'character-input.mjs' },
   { file: 'anim.mjs' },
   { file: 'character-sim.mjs' },
+  // dynamics (0.6.0): shapes -> broadphase -> narrowphase -> xpbd/joints -> world -> queries/bridge -> worker protocol
+  { file: 'dyn-shapes.mjs' },
+  { file: 'dyn-broadphase.mjs' },
+  { file: 'dyn-narrowphase.mjs' },
+  { file: 'dyn-joints.mjs' },
+  { file: 'dyn-world.mjs' },
+  { file: 'dyn-bridge.mjs', shim: true },
+  { file: 'dyn-serialize.mjs' },
 ];
 let failed = 0, ran = 0;
 const t0 = performance.now();

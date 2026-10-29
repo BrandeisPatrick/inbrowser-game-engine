@@ -50,9 +50,67 @@ engine.start();
 - Local lights: nearest-N real point lights + emissive/fake light pools for the rest; headlight cones.
 
 ## Physics
-- Default backend: pure JS, deterministic, runs in Node (so sims/tests run headless): heightfield ground, static AABB grid (buildings, props), dynamic AABB set (traffic), OBB sweeps for fast bodies, friction/restitution, damage callbacks.
-- `VehicleController`: sprung body on four spring / damper units with anti-roll and bump stops (axle loads, load transfer, squat / dive / body roll, kerbs and landings all come out of them), tyre slip model, speed-sensitive steering, boost, thruster flight (armed by a lift input: a jump is just a jump; fly-by-wire auto-level, hover assist, fuel), landing/impact events. Parameterised by a spec object so other cars/bikes/boats/drones can reuse it. See "Suspension & contact model" below.
-- Optional `RapierBackend` (`@dimforge/rapier3d-compat`, Apache-2.0, ~2 MB WASM) for general rigid bodies, joints and ragdolls when a game needs them; same `PhysicsWorld` interface.
+Two cooperating worlds, both pure JS, deterministic and Node-safe (`npm test` runs them headless):
+- `PhysicsWorld` (`physics/PhysicsWorld.js`) is the **query hub**: static AABB grid (buildings, props, canyon
+  walls), heightfield ground, pluggable dynamic providers (traffic, rigid bodies), surface provider, raycasts and
+  sphere casts, `supportAt`. The controllers drive on its queries: `VehicleController` (sprung body on four spring /
+  damper units with anti-roll and bump stops, tyre slip model, speed-sensitive steering, boost, thruster flight,
+  landing / impact events; parameterised by a spec object; see "Suspension & contact model") and
+  `CharacterController` (kinematic capsule, 0.5.0: see "Character stack").
+- `DynamicsWorld` (`physics/dynamics/`, 0.6.0) is the **unified XPBD rigid-body solver** (Müller, Macklin et al.
+  2020, substepped position-based dynamics with velocity-level restitution and friction), plugged into the
+  PhysicsWorld through `attachToPhysicsWorld(dyn, physics)`: every alive non-static body appears to the query hub as
+  a `kind: 'rigid'` box record (pooled, allocation-free), so the car and the character collide with crates without
+  knowing the solver, and the solver reads the PhysicsWorld's static boxes and heightfield as its static world.
+
+### DynamicsWorld (0.6.0)
+Modules under `physics/dynamics/`, each independently testable (`test/dyn-*.mjs`, 15 suites in `npm test`):
+- `state.js`: the shared data layout — `BodyStore` (structure-of-arrays Float64 state indexed by a dense body id:
+  pos / quat / prevPos / prevQuat / vel / angVel (world) / invMass / body-frame inverse inertia tensor / forces /
+  type / flags / layer / mask / aabb / sleep / kinematic target), `ContactBuffer` (normal from a to b, depth > 0 =
+  penetration, negative = speculative, persistent feature `key`, warm-start `lambdaN / lambdaT`), `pairKey`,
+  `WORLD_BODY`.
+- `shapes.js`: `sphere / capsule / box / convex (hull via three's ConvexHull, re-centred, `offset`) / trimesh
+  (static, median-split BVH) / compound`, with `inertia`, `aabb`, `support`, `project` as allocation-free scalar
+  methods (every shape shares one hidden class).
+- `broadphase.js`: dynamic AABB tree in typed arrays (Box2D-style, surface-area insertion, rotations), fat-margin
+  re-insertion, an incremental candidate list, pair keys radix-sorted ascending; the pair set is a pure function of
+  the bodies, never of insertion history (2000 bodies: 0.06 ms per update, 10 000: 0.4 ms).
+- `narrowphase.js`: closed forms for sphere / capsule / box pairs, 15-axis SAT + reference-face clipping for
+  box-box, GJK / EPA + face clipping for convex pairs, one-sided trimesh triangles through the BVH, compound
+  recursion, heightfield sampling under the lowest points; <= 4 points per manifold with stable feature keys and a
+  typed-array persistent table carrying warm-start impulses across steps.
+- `xpbd.js` + `joints.js`: the positional / angular XPBD corrections with compliance, the substep integrator
+  (implicit-midpoint gyroscopic term), velocity recovery, and `JointStore` with fixed / ball / hinge (limits,
+  motor, servo) / slider / distance (spring, rope) / d6 (per-axis locks, swing cone, twist) joints solved as joint
+  trees by a sparse LDLᵀ elimination per pass (a 20-link chain keeps its length to 1e-6 m; Gauss-Seidel stretched it
+  by 8 mm), `breakForce`.
+- `DynamicsWorld.js` + `islands.js`: the hub and its step: kinematic targets -> AABBs -> broadphase -> narrowphase
+  (pairs, static boxes, heightfield) -> substeps (integrate; position pass: manifold blocks with patch friction,
+  swept forward then backward, then joints; velocities from positions; velocity pass: restitution, Coulomb friction,
+  joint damping / motors) -> warm-start store -> islands (union-find) and sleeping -> events (`began` / `ended`
+  pair lists). Public API in the file header; `addJoint` takes string or `JOINT` types; `serialize() / from()`
+  round-trip bit-identically.
+- `queries.js` / `bridge.js` / `debug.js`: ray / shape casts and overlaps against body shapes, the PhysicsWorld
+  bridge (`attachToPhysicsWorld`, `syncKinematicFromObject`), debug line generation (`render/PhysicsDebug.js`
+  draws it).
+- `DynamicsClient.js` + `dynamics.worker.js`: the same API over a module Worker (command stream in a Float64Array,
+  ids mirrored synchronously on the main thread, double-buffered transferable snapshots like the traffic worker,
+  extrapolated `getPose`, snapshot `queryColliders`); `{ worker: false }` runs in-thread with one code path.
+  Worker mode sees the static boxes it was created with and no heightfield / providers / raycasts.
+Determinism: the step path uses only `+ - * /`, `Math.sqrt` and comparisons (angles through `MathDet.detAtan2`),
+iterates every array in ascending index order, never a Set or Map, so Node and every browser produce the same
+bits (the suites pin golden hashes). Allocation: zero retained growth per step; V8 still boxes some doubles across
+function calls (~3 KB per step at 300 contacts), which is noise, not garbage pressure.
+Measured (Apple M4, Chrome, `samples/sandbox`): a 10-box stack is stable for 10 s with 3e-15 m drift; 1000 mixed
+bodies dropped into a pit step at 6.5 ms while falling and 9.5 ms with 960 still awake after 14 s at 60 Hz (mixed
+shapes keep rolling; the all-box pit in `test/dyn-world.mjs` sleeps in 9 s) in-thread, or 10.7 ms in the worker
+with 0.5 ms of main-thread time; 5 ragdolls (11 capsules, 10 joints each) settle and sleep within 17 s. The
+sandbox's bench poses reset the scene and hand-step a fixed number of steps, so their captures reproduce across
+page loads (stack overview / close hashes equal on every load).
+What is not there yet: continuous collision detection (fast thin bodies can tunnel), compounds off their centroid
+rotate about the shape origin, the car treats bridged bodies as immovable walls (two-way vehicle coupling is
+Phase 5, as are cloth, ropes, soft bodies, buoyancy and fracture).
 
 ## World layer (`engine/src/world`, extracted)
 `MapWorld` composes a whole city from map data + options + plugins; every system is also usable on its own.
@@ -654,8 +712,11 @@ What makes a capture reproducible across page loads (learned on 0.5.0 while movi
 - LOD partitions have hysteresis and throttles: run the poses in a fixed order from a fresh page load (the smoke
   script does), or force the partitions (the city harness calls `world.update(1, …)` three times);
 - freeze auto-exposure (`postfx.autoExposure = false; postfx.setTimeOfDay(darkness)`) and clear particles.
-With that, every pose of Canyon Run and the city hashes identically across reloads; the remaining noise is the
-byte quantisation of the stored captures (mean 0.25 / 255). `npm run smoke` asserts two equal captures per pose
+With that, every pose of Canyon Run, the city, the character and the sandbox hashes identically across reloads in
+the desktop app's browser (0.6.0: two fresh loads diff to exactly 0 on every pose). Headless Chrome under Playwright
+reproduces most poses but not all: Canyon Run's `straight` and `ahead` hashes drift between smoke runs while
+`chase` / `aerial` and every city / character / sandbox pose stay equal, so cross-phase pixel gates are read in the
+app's browser (or as same-page A/B through `run(plan)`), and the smoke's job is boot + stability within a load. `npm run smoke` asserts two equal captures per pose
 on every page; `npm run bench` writes `bench/results/<date>-<HHMM>-<page>-<WxH>-<label>.json`.
 
 ### Phase 1 baseline (0.5.0, `bench/results/2026-10-29-*-p1-baseline.json`)

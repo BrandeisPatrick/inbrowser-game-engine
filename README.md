@@ -31,11 +31,15 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
   The street-drive and traffic checks that need the San Francisco map live in the game repository (`dev/`).
 - `samples/city/` — dev-only harness: the procedural city in the browser at http://localhost:5190/city/ (free-fly
   camera, post stack, F3 profiler), for seeing and measuring the world layer without map data.
+- `samples/sandbox/` — physics sandbox for the XPBD `DynamicsWorld` (0.6.0): stacks, joints, chains, ragdolls, the
+  roadster among crates, a 1000-body benchmark; `?worker=1` runs the solver in a Worker, `?debug=1` draws it.
 - `samples/character/` — third-person character playground: a glTF character (`node tools/fetch-models.mjs`
   downloads the CC0 RobotExpressive model; `?model=` loads any other) or a procedural rigged fallback, driven by
   `CharacterController`, `AnimationController`, `ThirdPersonRig` / `FirstPersonRig` and `CharacterInput`.
 - `test/core.mjs`, `test/assets.mjs`, `test/anim.mjs`, `test/rigs.mjs`, `test/character-sim.mjs` — headless checks
   of the 0.5.0 core services, loaders, animation layer, character rigs and the kinematic character controller.
+- `test/dyn-*.mjs` — headless checks of the 0.6.0 dynamics: shapes, broadphase, narrowphase, joints, the world,
+  the PhysicsWorld bridge and the worker protocol (golden determinism hashes).
 - `test/world-build.mjs` — builds the procedural city headless (`MapWorld` with `renderer: null`, no DOM: the canvas
   painters run against `test/helpers/dom-shim.mjs`) and pins its stats, physics queries and 10 s of deterministic
   traffic (`npm test` runs it after car-sim; ~2 s).
@@ -45,6 +49,9 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
   `Clock`, `Entity` / `EntitySystem`, deterministic math (`MathDet`), the bench harness (`createBenchHarness`).
 - `src/anim/` — `AnimationController` (states, blend trees, transitions, root motion over `AnimationMixer`),
   `TwoBoneIK`, CCD IK helpers.
+- `src/physics/` — `PhysicsWorld` (query hub), `VehicleController`, `CharacterController`, and `dynamics/`: the
+  unified XPBD rigid-body solver (`DynamicsWorld`, shapes, joints, queries, `attachToPhysicsWorld`,
+  `DynamicsClient` worker).
 - `src/world/` — data-driven city worlds: `MapWorld` (map + terrain + options + plugins) and its systems: `Terrain`,
   `MapData`, `RoadNetwork`, `Buildings` + `FacadeTextures`, `Props` + `Furniture` + `Vehicles`, `Traffic`,
   `Vegetation` (+ `Veg*`), `Water`, `Shore`, `Boats`, plus `MeshChunker`, `ShadowPasses`, `NearestLights`. API, plugin

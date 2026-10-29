@@ -1,6 +1,6 @@
 {
   "name": "@vibe/engine",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Browser game engine on Three.js/WebGL2: fixed-step core with CPU/GPU profiler, deterministic JS vehicle physics, atmosphere + post-processing, instancing/LOD/impostor utilities, data-driven city worlds (OpenStreetMap + terrain), traffic AI, input, camera rigs, synth audio, DOM UI widgets",
   "repository": {
     "type": "git",

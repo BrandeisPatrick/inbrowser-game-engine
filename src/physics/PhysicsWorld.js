@@ -22,7 +22,12 @@ export function layerOf(kind) {
   if (bit === undefined) { bit = _nextNamed < 30 ? 1 << _nextNamed++ : LAYER.OTHER; _named.set(kind, bit); }
   return bit;
 }
+/** The named-kind layer table as `[kind, bit]` pairs (ship it to a worker so its `layerOf` agrees with the main thread). */
+export function namedLayers() { return Array.from(_named.entries()); }
+/** Install a named-kind table from `namedLayers()` (a worker calls it before building its PhysicsWorld). */
+export function setNamedLayers(entries) { _named.clear(); _nextNamed = 24; for (const [k, bit] of entries) { _named.set(k, bit); const b = Math.log2(bit) + 1; if (b > _nextNamed) _nextNamed = b; } }
 layerOf('vehicle'); // reserve bit 24 for traffic so masks are stable across runs
+layerOf('rigid');   // bit 25: DynamicsWorld bodies bridged into this world (attachToPhysicsWorld)
 
 const EMPTY_OPTS = Object.freeze({});
 const makeHit = () => ({ distance: 0, point: new Vector3(), normal: new Vector3(), box: null, kind: null, ground: false });

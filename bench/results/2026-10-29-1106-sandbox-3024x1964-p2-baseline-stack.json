@@ -1,0 +1,56 @@
+{
+  "page": "sandbox",
+  "label": "p2-baseline-stack",
+  "date": "2026-10-29T15:06:42.519Z",
+  "url": "http://127.0.0.1:5199/sandbox/?bench=1&size=3024x1964&scene=stack",
+  "chrome": "155.0.8059.86",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 604,
+  "reloads": 0,
+  "poses": [
+    "overview",
+    "close"
+  ],
+  "settings": [],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "overview",
+      "ms": 5.262,
+      "fps": 190.02,
+      "hash": "d283ee8c",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "current",
+      "pose": "close",
+      "ms": 5.096,
+      "fps": 196.24,
+      "hash": "c2ade89b",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 25,
+      "triangles": 2794
+    }
+  ]
+}
