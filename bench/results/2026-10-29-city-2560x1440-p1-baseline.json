@@ -1,0 +1,70 @@
+{
+  "page": "city",
+  "label": "p1-baseline",
+  "date": "2026-10-29T12:49:52.849Z",
+  "url": "http://127.0.0.1:5199/city/?bench=1&size=2560x1440",
+  "chrome": "155.0.8059.86",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 1476,
+  "poses": [
+    "street",
+    "crossing",
+    "high"
+  ],
+  "settings": [],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "street",
+      "ms": 10.271,
+      "fps": 97.36,
+      "hash": "908bb59b",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 176,
+      "triangles": 905858
+    },
+    {
+      "setting": "current",
+      "pose": "crossing",
+      "ms": 9.992,
+      "fps": 100.08,
+      "hash": "c2ea85a6",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 176,
+      "triangles": 856478
+    },
+    {
+      "setting": "current",
+      "pose": "high",
+      "ms": 10.417,
+      "fps": 96,
+      "hash": "110dbbe8",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 180,
+      "triangles": 892344
+    }
+  ]
+}

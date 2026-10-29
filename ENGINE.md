@@ -15,12 +15,15 @@ Code lives in `engine/` (imported by the game as `../engine/src/index.js`; later
 
 ## Layers (each folder is independently importable; lower layers never import higher ones)
 
+Order: core < physics < render < anim / input / camera / audio / ui < world.
+
 | Layer | Folder | What moves in from the game | New |
 |---|---|---|---|
 | core | `engine/src/core` | fixed-step loop (120 Hz, max substeps), resize, adaptive pixel ratio (`main.js`) | `Engine` (renderer + scene + systems registry + render interpolation), `Profiler` (CPU timers per system, GPU timer queries), `Events`, `Clock`, debug overlay |
 | render | `engine/src/render` | `sky.js` (sun/sky/clouds/fog/time of day), PostFX (GTAO, bloom, SMAA, grading), shadow cascades, texture-set loader + canvas fallbacks (`textures.js`), vegetation impostor baker, facade texture arrays | `InstancedPool` + `LODGroup` + `Impostor` utilities, `MaterialLib`, `DecalTrail`, pooled `Particles`, `Culling` (frustum + distance per chunk) |
 | physics | `engine/src/physics` | `Physics.js` vehicle model (arcade-realistic, deterministic, Node-testable), AABB `ColliderGrid`, heightfield queries, OBB-vs-AABB SAT, sub-stepped sweeps | `PhysicsWorld` interface (static colliders, heightfield, dynamic AABBs, raycast/spherecast), `VehicleController` (wheels + thrusters as a controller on any body), optional `RapierBackend` for general rigid bodies |
 | world | `engine/src/world` | **extracted**: terrain heightfield + draping, map data + procedural fallback, road network, building builder + facade layers, props / furniture / vehicle library, vegetation, traffic AI, water / shore / boats / far relief; bakers in `engine/tools` (the Bay Bridge and the landmarks stay in the game as MapWorld plugins) | `MapWorld` (options + plugin hooks), data contracts for city / terrain / farland JSON, parameterised bakers; `TileStreamer` (building tiles built / freed around the camera, see "Streaming"); traffic AI in a Web Worker (`TrafficSim` core, see "Traffic simulation") |
+| anim | `engine/src/anim` | — | `AnimationController` (state machine + 1D blend trees + transitions + root motion over `AnimationMixer`), `TwoBoneIK`, CCD IK helper (0.5.0) |
 | input | `engine/src/input` | `Input.js` (keyboard/gamepad, analog smoothing, edge flags) | touch/virtual sticks, rebinding |
 | camera | `engine/src/camera` | `ChaseCamera` (modes, occlusion avoidance) | `CameraRig` base, orbit/free/cinematic rigs |
 | audio | `engine/src/audio` | WebAudio synth bus (`Audio.js`) | `AudioBus` (mixer, positional emitters, synth voices) |
@@ -346,7 +349,7 @@ A/B comparisons; `TextureSets.configure({ ktx2, arrayKtx2, basisPath, workers, l
 - **Window units** (real openings + instanced window frames) exist only in detail cells within 300 m (8 x 8 cells,
   THREE.LOD with 5 % hysteresis); beyond that the parallax texture windows of the shell take over.
 - **API evolution.** New behaviour arrives as an option or spec field whose default reproduces the previous
-  behaviour (the Roadster must drive identically: `node tools/car-sim.mjs`). Options that encode one game's world
+  behaviour (the Roadster must drive identically: `node test/car-sim.mjs`). Options that encode one game's world
   rules (tree canopies on kind-2 trunks, thin kinds 2/3) are opt-in in the base class and switched on by the
   game-facing preset (`ChaseRig`), never baked into lower layers.
 - **Per-frame calls take positional args or reuse caller-owned objects** (`Minimap.update(dt, x, z, ...)`,
@@ -583,3 +586,94 @@ display runs at full resolution and 60 fps as before; `targetFps: 120` makes the
 pixel ratio, `targetFps: 60` halves the work per second on a 120 Hz display. The F3 overlay shows ticks per second and
 the display rate. Known limits: a cap of 30 runs the 120 Hz simulation ~9 % slow (every tick needs the full 4
 substeps; raise `maxSubsteps`), and the controller only ever lowers the pixel ratio under vsync (as it always did).
+
+## Core services (0.5.0): Events, Clock, Entity, Assets, deterministic math, bench harness
+The 0.5.0 pass makes the engine usable beyond the driving game without adding a framework on top of three.js. Each
+service is opt-in and `Engine` behaves exactly as before when none is used (`npm test` and the sample captures are
+unchanged).
+- `Events` (`core/Events.js`): a typed emitter, `on / once / off / has / emit(type, a, b, c, d)`, positional args,
+  registration order, listeners may be added or removed during an emit (removals are compacted after the emit),
+  and `emit` allocates nothing (dense arrays per type). Used by `AnimationController.events`.
+- `Clock` (`core/Clock.js`, `engine.clock`): `timeScale`, `paused`, `step(n)` (n fixed steps while paused),
+  `time` / `unscaledTime` / `frame`. `Engine.tick` scales the frame dt for every system and the fixed accumulator;
+  the profiler, overlay and adaptive resolution keep the wall dt. `engine.clock.pause()` keeps rendering.
+- `Entity` / `EntitySystem` (`core/Entity.js`): a thin component layer over `Object3D` — `entity.addComponent(c)`,
+  components with `onAttach / onDetach / fixedUpdate(dt) / update(dt, alpha) / lateUpdate(dt, alpha)`, one
+  `EntitySystem` registered with `engine.addSystem`, dense per-phase arrays (no per-frame `if (c.update)` probing),
+  safe add / remove / destroy during a phase loop. No engine layer depends on it; samples use it for per-object
+  behaviour.
+- `Engine` additions: a system's numeric `priority` orders it before higher values (registration order within a
+  priority); `engine.setSystemEnabled(systemOrName, false)` skips a system in every phase (a dedicated flag:
+  InputMap, Ambience and the rigs keep their own `enabled` semantics).
+- `Assets` (`core/Assets.js`): loader registry with cache, URL dedupe, refcounts (`release` disposes at zero),
+  weighted progress and `assets.system()` for `engine.load`. `registerRenderLoaders(assets, renderer, { dracoPath,
+  ktx2, meshopt })` adds `gltf` (`{ scene, animations, instantiate() }`, KTX2 through the TextureSets support,
+  meshopt on demand, Draco when a decoder path is given), `texture`, `hdr` (`{ pmrem }`), `lut` (`.cube` ->
+  `Data3DTexture`); `registerAudioLoader(assets, bus)` adds `audio` (decoded in an OfflineAudioContext before the bus has
+  started, so a loading screen never waits for a gesture; `{ offline: false }` waits for the bus) and `SamplePlayer` plays buffers through the existing bus / positional emitters.
+- `MathDet` (`core/mathDet.js`): `mulberry32`, `hashU32 / hashF64 / hashF64Array` (determinism hashes) and
+  `detAtan2 / detAcos / detAsin / detAtan` built from + - * / sqrt only (max error 4.4e-16 vs `Math.*`), for
+  simulation code that must be bit-identical on every JS engine.
+- `createBenchHarness` (`core/Bench.js`): see "Measurement protocol".
+- Tooling: `npm test` runs `test/all.mjs` (every headless suite); `npm run types` emits `types/` from the JSDoc
+  (`tsconfig.types.json`); `npm run smoke` / `npm run bench` drive the samples in Chrome through Playwright
+  (`test/browser/`); `.github/workflows/ci.yml` runs test + build + types on every push and pull request.
+
+## Character stack (0.5.0)
+- `CharacterController` (`physics/CharacterController.js`): a kinematic capsule over the `PhysicsWorld` query API
+  (`getGroundHeight`, `queryColliders`, optional `surfaceAt`), `step(dt, moveX, moveZ, jump, sprint, world)` with
+  world-space move direction, step climbing up to `stepHeight`, slope limit, wall slide, ground snapping, coyote
+  time and jump buffering (the jump edge is detected internally), crouch via `setHeight(h, world)` / `canStand`
+  (auto-crouch under a ceiling); outputs polled per step like `VehicleController` (`grounded`, `landedThisStep`,
+  …). You cannot stand on a vehicle yet (Phase 5). Deterministic: the step path uses no trig.
+  `test/character-sim.mjs` pins it by ranges and a golden hash.
+- `ThirdPersonRig` / `FirstPersonRig` (`camera/`): orbit-behind and eye-height rigs on `CameraRig` with
+  `look(dx, dy)`, damped follow, `CameraCollision` pull-in (the ChaseRig method) and ground clamp; yaw 0 = -Z,
+  positive yaw turns left; `getForward / getRight` give the yaw basis for camera-relative movement. Target facing
+  is read from the state getter (`facing` / `heading`), head bob from `speed` / `grounded`.
+- `CharacterInput` (`input/`): the `CHARACTER_ACTIONS` preset (move / look / jump / sprint / crouch / interact /
+  toggleCamera / menu) with touch layout; look deltas are radians per frame and only flow under pointer lock or a
+  right-button hold; `PointerLock` wraps the DOM API (`request() -> Promise<boolean>`, `releasedByUser`).
+- `anim` layer: `AnimationController` (states, 1D blend trees, transition table, markers, root motion with the
+  hips' horizontal track neutralised) and `TwoBoneIK` / CCD helpers.
+- `samples/character/`: third-person playground (glTF via `?model=` or `tools/fetch-models.mjs`, procedural rigged
+  fallback built in code, so no binary asset is committed).
+
+## Measurement protocol (0.5.0)
+Every sample page exposes `window.__sample` (`createBenchHarness`): `pose(id)` stops the loop, places the camera,
+runs the sample's `after` (culling, LOD partitions, atmosphere) and `quiet` (particles off, exposure frozen) hooks
+and renders two frames with dt = 0; `bench(frames)` is `Profiler.benchThroughput` over `engine.renderFn` (CPU
+submission + GPU execution, no vsync); `capture(scale)` reads the default framebuffer right after a render and
+box-downsamples it; `diff(a, b)` gives `meanAbs / p99 / max / pctOver2 / pctOver8`; `run(plan)` crosses poses and
+settings into a table. `?bench=1&size=WxH` pins the drawing buffer at pixel ratio 1.
+What makes a capture reproducible across page loads (learned on 0.5.0 while moving the vite root):
+- the sky's cloud time is wall-clock driven (`uTime`, `uCloudOffset` advance in `Atmosphere.update`): pin both;
+- the shared time uniforms (`createTimeUniforms`) hold the wind phase and, in `uViewPos`, the camera position the
+  dither fades measure distance from: pin `uTime` and copy the camera position (a stale `uViewPos` moved 2-5 %
+  of Canyon Run's pixels by up to 190 / 255);
+- LOD partitions have hysteresis and throttles: run the poses in a fixed order from a fresh page load (the smoke
+  script does), or force the partitions (the city harness calls `world.update(1, …)` three times);
+- freeze auto-exposure (`postfx.autoExposure = false; postfx.setTimeOfDay(darkness)`) and clear particles.
+With that, every pose of Canyon Run and the city hashes identically across reloads; the remaining noise is the
+byte quantisation of the stored captures (mean 0.25 / 255). `npm run smoke` asserts two equal captures per pose
+on every page; `npm run bench` writes `bench/results/<date>-<HHMM>-<page>-<WxH>-<label>.json`.
+
+### Phase 1 baseline (0.5.0, `bench/results/2026-10-29-*-p1-baseline.json`)
+Headed Chrome 142 (Playwright, `--use-angle=metal`), Apple M4, pixel ratio 1, 24 frames per pose after 3 warm-up frames,
+engine defaults of each sample (Canyon Run: 'fast' shadows, MSAA under 4 Mpx; city: engine defaults, traffic on).
+The in-app browser measures the same poses within 0.1-0.2 ms (Canyon Run straight 8.22, chase 8.63, aerial 8.78 ms at
+3024x1964); the first headed run after a cold start read about 1 ms higher on every pose, so compare numbers only
+from warm runs in one environment.
+
+| sample | pose | ms at 3024x1964 | ms at 2560x1440 | draw calls | triangles |
+|---|---|---|---|---|---|
+| canyon-run | straight | 8.39 | 8.43 | 55 | 0.57 M |
+| canyon-run | chase | 8.71 | 8.45 | 59 | 0.70 M |
+| canyon-run | aerial | 8.85 | 9.76 | 54 | 0.74 M |
+| canyon-run | ahead | 5.65 | 5.93 | 44 | 0.59 M |
+| character | idle | 5.47 | 5.14 | 62 | 0.01 M |
+| character | run | 4.91 | 5.07 | 62 | 0.01 M |
+| character | aerial | 4.48 | 4.80 | 63 | 0.01 M |
+| city | street | 13.31 | 10.27 | 172 | 0.86 M |
+| city | crossing | 12.65 | 9.99 | 174 | 0.84 M |
+| city | high | 13.25 | 10.42 | 176 | 0.86 M |

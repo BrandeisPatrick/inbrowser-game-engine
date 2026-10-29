@@ -4,3 +4,4 @@ export { noiseBuffer, loopSource, makeFilter, makeGain, makeShaper, softClipCurv
 export { PositionalAudio, AudioListener3D, Emitter as AudioEmitter } from './Positional.js';
 export { CityAmbience } from './Ambience.js';
 export { VehicleAudio } from './VehicleAudio.js';
+export { registerAudioLoader, SamplePlayer } from './Samples.js';

@@ -10,6 +10,7 @@
 //   input.setContext('flight', true);      // bindings with when: 'flight' / '!flight' switch over
 //   input.update(dt);                       // once per frame
 //   input.value('steer'); input.down('jump'); input.justPressed('jump'); input.justReleased('jump');
+//   input.readSources('look', out);        // per-kind raw sums of one action, for presets that combine sources themselves
 //
 // `input.enabled = false` silences every action except "always-on" ones: an action defined with
 // alwaysOn: true (or a single binding carrying alwaysOn: true) keeps working, e.g. menu / camera / debug keys
@@ -22,6 +23,10 @@
 // Edges are latched from key events, so a tap shorter than a frame still yields one justPressed.
 // Key events with Cmd / Ctrl / Alt held are ignored (browser shortcuts), but the modifier keys themselves are
 // tracked, so 'ShiftLeft' / 'AltLeft' / ... can be bound (e.g. a "slow" modifier).
+// readSources(name, out) fills a reused `out` with the raw, unclamped, unsmoothed contributions of the action's active
+// bindings this frame (after update(); honours `enabled`, alwaysOn and contexts): `mouse` (mouse-axis deltas × value),
+// `virtual`, `pad` (gamepad axes + buttons) as sums, `keyPos` / `keyNeg` as the strongest + / − of key and mouse-button
+// bindings (OR-ed per direction, like the action). E.g. mouse-look keeps pixel deltas unclamped while sticks ramp.
 // Safe to import in Node; DOM listeners are only attached when `window` exists.
 import { GamepadState } from './Gamepad.js';
 
@@ -228,6 +233,31 @@ export class InputMap {
   get pressedKeys() { return this._keys; }
   /** Pointer deltas of the current frame. */
   get mouseDelta() { return this._mouseFrame; }
+  /**
+   * Raw per-kind contributions of one action's active bindings this frame (see header). Allocation-free with a reused `out`.
+   * @param {string} name
+   * @param {{mouse:number, virtual:number, pad:number, keyPos:number, keyNeg:number}} [out]
+   */
+  readSources(name, out = { mouse: 0, virtual: 0, pad: 0, keyPos: 0, keyNeg: 0 }) {
+    out.mouse = out.virtual = out.pad = out.keyPos = out.keyNeg = 0;
+    const a = this.actions.get(name);
+    if (!a) return out;
+    const all = this.enabled || a.alwaysOn;
+    if (!all && !a._liveBindings) return out;
+    for (let i = 0; i < a.bindings.length; i++) {
+      const b = a.bindings[i];
+      if (!all && !b.alwaysOn) continue;
+      if ((b._req.length || b._not.length) && !this._active(b)) continue;
+      const v = this._read(b);
+      switch (b.kind) {
+        case 'mouseAxis': out.mouse += v; break;
+        case 'virtual': out.virtual += v; break;
+        case 'padAxis': case 'padButton': out.pad += v; break;
+        default: if (v > out.keyPos) out.keyPos = v; else if (v < out.keyNeg) out.keyNeg = v;   // key, mouseButton
+      }
+    }
+    return out;
+  }
 
   // ------------------------------------------------------------------ events
   _onKeyDown(e) {

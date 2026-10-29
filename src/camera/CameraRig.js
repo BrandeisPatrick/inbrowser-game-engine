@@ -68,7 +68,7 @@ export class CameraCollision {
     const P = o.physics || null;
     this.physics = P;
     this.getGroundHeight = o.getGroundHeight || (P && typeof P.getGroundHeight === 'function' ? (x, z, y) => P.getGroundHeight(x, z, y) : null);
-    this.queryColliders = o.queryColliders || (P && typeof P.queryColliders === 'function' ? (x, z, r) => P.queryColliders(x, z, r, this._qOut) : null);
+    this.queryColliders = o.queryColliders || (P && typeof P.queryColliders === 'function' ? (x, z, r) => P.queryColliders(x, z, r, this._qOut) || this._qOut : null);
     this.raycast = o.raycast || (P && typeof P.raycast === 'function' ? (orig, dir, max) => P.raycast(orig, dir, max) : null);
     this.occlusion = o.occlusion !== false;
     this.canopyFromCollider = typeof o.canopyFromCollider === 'function' ? o.canopyFromCollider : null;

@@ -8,7 +8,14 @@
 //   update?(dt, alpha)                  once per frame after the fixed steps (alpha = interpolation factor)
 //   lateUpdate?(dt, alpha)              once per frame after every update (things that follow the final camera)
 //   dispose?()
-// Each phase runs systems in registration order. Per-system CPU time (all phases, summed per frame) is
+// Each phase runs systems in registration order, except that a system with a numeric `priority` field runs before
+// systems with a higher value (default 0; equal priorities keep registration order; read once by addSystem).
+// `engine.setSystemEnabled(systemOrName, false)` skips a system in every phase until it is enabled again (a
+// dedicated flag, not the system's own `enabled` field: InputMap, Ambience and the rigs give that field a meaning
+// of their own and keep running while it is false).
+// `engine.clock` (core/Clock.js) scales the frame time: `timeScale` slows or speeds the simulation and the per-frame
+// dt, `paused` stops both (the loop keeps rendering), `step(n)` runs n fixed steps while paused. The profiler, the
+// overlay and adaptive resolution always see the unscaled wall dt. Per-system CPU time (all phases, summed per frame) is
 // recorded in engine.profiler under the system's name, plus 'sim' (whole fixed loop) and 'render'.
 //
 // Frame pacing. requestAnimationFrame drives tick(). `targetFps` (option and live property; 0 = tick on every
@@ -29,6 +36,7 @@
 // drops below the budget, so in practice the ratio only comes down (as it always did on 60 Hz screens).
 import * as THREE from 'three';
 import { Profiler, ProfilerOverlay } from './Profiler.js';
+import { Clock } from './Clock.js';
 
 const noop = () => {};
 const now = () => performance.now();
@@ -53,11 +61,13 @@ export class Engine {
    * @param {HTMLElement} [o.overlayParent=document.body]
    * @param {number|boolean} [o.profile=false]  dump profiler.snapshot() with console.table after N s (true = 10 s)
    * @param {object} [o.physics]  optional physics world, exposed as engine.physics (e.g. a PhysicsWorld)
+   * @param {Clock} [o.clock]  time control (default: a new Clock at timeScale 1, not paused)
    */
   constructor(o = {}) {
     this.container = o.container || document.body;
     this.fixedDt = 1 / (o.fixedHz || 120);
     this.maxSubsteps = o.maxSubsteps || 4;
+    this.clock = o.clock || new Clock();
     this.systems = [];
     this.physics = o.physics || null;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', ...(o.renderer || {}) });
@@ -97,9 +107,17 @@ export class Engine {
   addSystem(s, name) {
     s.__name = name || s.__name || (s.constructor && s.constructor !== Object ? s.constructor.name : '') || `system${this.systems.length}`;
     s.__ms = 0;
-    this.systems.push(s);
+    s.__pr = Number.isFinite(s.priority) ? s.priority : 0;
+    if (s.__on === undefined) s.__on = true;
+    const S = this.systems;
+    let i = S.length; // insert after the last system whose priority is <= ours (stable for equal priorities)
+    while (i > 0 && S[i - 1].__pr > s.__pr) i--;
+    S.splice(i, 0, s);
     return s;
   }
+  /** Skip (false) or run (true) a system in every phase; `s` is the system or its name. */
+  setSystemEnabled(s, on = true) { const sys = typeof s === 'string' ? this.getSystem(s) : s; if (sys) sys.__on = !!on; return sys; }
+  isSystemEnabled(s) { const sys = typeof s === 'string' ? this.getSystem(s) : s; return !!sys && sys.__on !== false; }
   removeSystem(s) { const i = this.systems.indexOf(s); if (i >= 0) this.systems.splice(i, 1); }
   getSystem(name) { return this.systems.find((s) => s.__name === name) || null; }
 
@@ -173,37 +191,40 @@ export class Engine {
    */
   tick(dt) {
     const P = this.profiler; P.frameBegin();
-    dt = dt > 0.25 ? 0.25 : dt >= 0 ? dt : 0;
+    const raw = dt > 0.25 ? 0.25 : dt >= 0 ? dt : 0; // wall dt: profiler, overlay, adaptive resolution
+    const clock = this.clock; dt = clock.advance(raw); // scaled dt for the systems (0 while paused)
     this.time += dt; this.frameCount++; this.dt = dt;
     const S = this.systems;
     for (let i = 0; i < S.length; i++) S[i].__ms = 0;
     // early (input)
-    for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.earlyUpdate) { const t0 = now(); s.earlyUpdate(dt); s.__ms += now() - t0; } }
-    // fixed-step simulation
-    this._acc += dt; let steps = 0;
+    for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.earlyUpdate && s.__on !== false) { const t0 = now(); s.earlyUpdate(dt); s.__ms += now() - t0; } }
+    // fixed-step simulation (forced steps: clock.step(n) while paused; the surplus beyond maxSubsteps is re-queued)
+    this._acc += dt; let steps = 0, forced = clock.paused ? clock.takeSteps() : 0;
     const tSim = now();
-    while (this._acc >= this.fixedDt && steps < this.maxSubsteps) {
-      for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.fixedUpdate) { const t0 = now(); s.fixedUpdate(this.fixedDt); s.__ms += now() - t0; } }
-      this._acc -= this.fixedDt; steps++;
+    while (steps < this.maxSubsteps && (forced > 0 || this._acc >= this.fixedDt)) {
+      for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.fixedUpdate && s.__on !== false) { const t0 = now(); s.fixedUpdate(this.fixedDt); s.__ms += now() - t0; } }
+      if (forced > 0) forced--; else this._acc -= this.fixedDt;
+      steps++;
     }
-    if (steps === this.maxSubsteps) this._acc = 0;
+    if (forced > 0) clock.step(forced);
+    if (steps === this.maxSubsteps && !clock.paused) this._acc = 0;
     P.record('sim', now() - tSim);
     this.substeps = steps; P.frame.steps = steps;
     const alpha = this.alpha = this._acc / this.fixedDt;
     // per-frame systems
-    for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.update) { const t0 = now(); s.update(dt, alpha); s.__ms += now() - t0; } }
-    for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.lateUpdate) { const t0 = now(); s.lateUpdate(dt, alpha); s.__ms += now() - t0; } }
+    for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.update && s.__on !== false) { const t0 = now(); s.update(dt, alpha); s.__ms += now() - t0; } }
+    for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.lateUpdate && s.__on !== false) { const t0 = now(); s.lateUpdate(dt, alpha); s.__ms += now() - t0; } }
     for (let i = 0; i < S.length; i++) { const s = S[i]; if (s.earlyUpdate || s.fixedUpdate || s.update || s.lateUpdate) P.record(s.__name, s.__ms); }
     // render
     P.begin('render'); P.gpuBegin('frame');
     this.renderer.info.reset();
     this.renderFn(this.scene, this.camera, dt);
     P.gpuEnd(); P.end('render');
-    if (this.overlay) this.overlay.update(dt);
-    P.frameEnd(dt);
-    if (this._profileAt && this.time >= this._profileAt) { this._profileAt = 0; console.table(P.snapshot()); }
-    if (this.adaptive && dt < 0.2) {
-      this._frameEMA += (dt - this._frameEMA) * 0.05; this._prTimer += dt;
+    if (this.overlay) this.overlay.update(raw);
+    P.frameEnd(raw);
+    if (this._profileAt && clock.unscaledTime >= this._profileAt) { this._profileAt = 0; console.table(P.snapshot()); }
+    if (this.adaptive && raw < 0.2) {
+      this._frameEMA += (raw - this._frameEMA) * 0.05; this._prTimer += raw;
       if (this._prTimer > 2) {
         this._prTimer = 0;
         // uncapped: the 60 fps budget as before (a 120 Hz screen keeps full resolution at 60 fps); capped: the cap, but
