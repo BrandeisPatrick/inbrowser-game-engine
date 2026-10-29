@@ -1,0 +1,120 @@
+{
+  "page": "canyon-run",
+  "label": "p3-cascades3",
+  "date": "2026-10-29T16:55:13.623Z",
+  "url": "http://localhost:5190/canyon-run/?cascades=3&bench=1&size=3024x1964",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 1398,
+  "reloads": 0,
+  "poses": [
+    "straight",
+    "chase",
+    "aerial",
+    "ahead"
+  ],
+  "settings": [],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "straight",
+      "ms": 8.446,
+      "fps": 118.4,
+      "hash": "03d02088",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 53,
+      "triangles": 563324,
+      "vsDefault": {
+        "hash": "2cb9ed80",
+        "meanAbs": 0.0037,
+        "p99": 0.01,
+        "max": 11.255,
+        "pctOver2": 0.058,
+        "pctOver8": 0.001
+      }
+    },
+    {
+      "setting": "current",
+      "pose": "chase",
+      "ms": 8.929,
+      "fps": 111.99,
+      "hash": "588b0e08",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 57,
+      "triangles": 694396,
+      "vsDefault": {
+        "hash": "f0f88cf5",
+        "meanAbs": 0.0069,
+        "p99": 0.021,
+        "max": 11.667,
+        "pctOver2": 0.12,
+        "pctOver8": 0.008
+      }
+    },
+    {
+      "setting": "current",
+      "pose": "aerial",
+      "ms": 9.254,
+      "fps": 108.06,
+      "hash": "33e4d409",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 54,
+      "triangles": 744046,
+      "vsDefault": {
+        "hash": "2f9ded46",
+        "meanAbs": 0.0031,
+        "p99": 0.005,
+        "max": 11.802,
+        "pctOver2": 0.046,
+        "pctOver8": 0.003
+      }
+    },
+    {
+      "setting": "current",
+      "pose": "ahead",
+      "ms": 5.746,
+      "fps": 174.04,
+      "hash": "cf7bb9ec",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 44,
+      "triangles": 593270,
+      "vsDefault": {
+        "hash": "b632ab1a",
+        "meanAbs": 0.0141,
+        "p99": 0.271,
+        "max": 10.323,
+        "pctOver2": 0.19,
+        "pctOver8": 0.002
+      }
+    }
+  ],
+  "note": "rows[].vsDefault: pixel diff against the 2-cascade default, captured on a fresh load of the default page at the same pose (scale 8)"
+}

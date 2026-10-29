@@ -26,6 +26,7 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { buildMipChain, dataTextureFromMips, fillTransparent, dilateRGB } from './MipChain.js';
 import { GLSL_IGN } from './MaterialPatches.js';
+import { GBUFFER_VERTEX_TAIL } from './GBuffer.js'; // G-buffer velocity varyings (the bake shaders replace project_vertex)
 
 export const DEFAULT_RINGS = [{ el: 10, n: 8 }, { el: 45, n: 8 }, { el: 80, n: 4 }];
 
@@ -322,7 +323,7 @@ if ( vFade <= 0.0 ) transformed = impC;
 const IMP_PROJECT = /* glsl */`
 vec4 mvPosition = modelViewMatrix * vec4( transformed, 1.0 );
 gl_Position = projectionMatrix * mvPosition;
-`;
+` + GBUFFER_VERTEX_TAIL;
 const IMP_WORLDPOS = /* glsl */`
 #if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || NUM_SPOT_LIGHT_COORDS > 0
 	vec4 worldPosition = modelMatrix * vec4( transformed, 1.0 );

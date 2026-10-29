@@ -1,5 +1,5 @@
 // Atmosphere: sky (THREE.Sky, patched: bigger sun disc + aureole, blue-hour / night model, stars, moon, drifting
-// procedural clouds), sun / moon light with a two-cascade camera-following shadow setup, hemisphere light
+// procedural clouds), sun / moon light with a 2-4 cascade camera-following shadow setup, hemisphere light
 // with ground bounce, PMREM environment from the sky, lens flare (occluded by the depth buffer) and fog.
 // Fog: `scene` mode = FogExp2 matched to the tone-mapped horizon (no post-processing); `post` mode = no scene
 // fog, PostFX does height + distance fog coloured by `skyCube` (sky radiance without sun disc / clouds).
@@ -8,13 +8,16 @@
 // API
 //   const atmo = new Atmosphere({ scene, renderer, camera?, timeOfDay: 'golden' | hours,
 //                                 shadows: { cascades: 2, near: 45, far: [260, 420, 650], kernel: 'pcf' }, ...tunings });
+//   shadows.cascades 1 | 2 | 3 | 4: the sun light (near cascade) + black shadow-only lights sunMid (3+), sunMid2 (4)
+//   and sunFar (always the farthest); shadows.kernel 'pcf' | 'fast' | 'pcss' (DEFAULT_SHADOWS)
 //   (legacy: new Atmosphere(scene, renderer, opts) followed by atmo.build())
 //   atmo.update(cameraPos, dt?)    per frame: sky follows the camera, clouds drift, cascades + flare follow
 //   atmo.setTimeOfDay(hoursOrPreset) / atmo.setTime(hours)
 //   atmo.darkness (0 day .. 1 night), atmo.windowGlow (night emissive factor), atmo.sunDir, atmo.sunColor,
 //   atmo.fogColor, atmo.fogParams (post fog), atmo.skyCube, atmo.version (bumps on every time change)
 //   atmo.setFogMode('scene' | 'post'), atmo.renderFlare(renderer, camera), atmo.setFlareScale(bufferHeight)
-//   atmo.setShadowKernel('pcf' | 'fast', root?)  sun shadow filter, switchable at runtime; atmo.shadowKernel
+//   atmo.setShadowKernel('pcf' | 'fast' | 'pcss', root?)  sun shadow filter, switchable at runtime; atmo.shadowKernel
+//   atmo.shadowCascadeInfo(out)    cascade lights, cameras, shadow matrices, half sizes and maps (sampling passes)
 // Tunings (constructor options; defaults are the Roadster values): sun (solar model), looks (keyframes),
 // skyGain, sunIntensity, moon, cloudWind, fog, maxCasterHeight, flare, timePresets.
 import * as THREE from 'three';
@@ -22,13 +25,17 @@ import { Sky } from 'three/addons/objects/Sky.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { clamp, smoothstep } from './noise.js';
 import { makeCloudTexture, sampleCloud, makeFlareTextures } from './skyTextures.js';
-import { installCascadeShadowChunk } from './shadowCascade.js';
-import { installFastShadowChunk, createShadowDepthTexture, attachShadowDepth, setFastShadowMaps, applyShadowKernel } from './shadowKernel.js';
+import { installCascadeShadowChunk, MAX_CASCADES } from './shadowCascade.js';
+import {
+  SHADOW_KERNELS, installFastShadowChunk, installPcssShadowChunk, createShadowDepthTexture, attachShadowDepth, setFastShadowMaps,
+  setPcssShadowParams, applyShadowKernel,
+} from './shadowKernel.js';
 
 const DEG = Math.PI / 180;
+const PCSS_MATERIAL_UNITS = 8; // texture units 'pcss' must leave to materials (it binds 2 per cascade)
 export const TIME_PRESETS = { dawn: 7.25, morning: 9.5, noon: 13, afternoon: 15.5, golden: 17.55, sunset: 18.45, dusk: 18.95, night: 22 };
 
-const CASCADES = installCascadeShadowChunk(); // global chunk patch, inert unless the far cascade light exists
+const CASCADES = installCascadeShadowChunk(); // global chunk patch, inert unless the cascade lights exist (3 / 4: upgraded by the constructor)
 
 /**
  * Default solar model: San Francisco in October. rise / set in hours, maxElevation (deg) at solar noon,
@@ -256,17 +263,23 @@ export const DEFAULT_FLARE = [
 ];
 
 const DEFAULT_SHADOWS = {
-  cascades: 2,            // 2 = near + far cascade (needs the chunk patch), 1 = a single shadow map
+  cascades: 2,            // 2 = near + far cascade (needs the chunk patch), 3 / 4 add middle cascades, 1 = a single map
   near: 45,               // near cascade half size (m)
   far: [260, 420, 650],   // far cascade half size (m) by camera height step
-  farUp: [70, 200],       // camera heights that step the far box up ...
+  farUp: [70, 200],       // camera heights that step the far (and middle) boxes up ...
   farDown: [50, 160],     // ... and back down (hysteresis)
+  mid: null,              // 3 / 4 cascades: half size (m) of each middle cascade, a number or [m by far step]; null:
+                          // texel sizes in geometric progression from the near map to the far map (rounded to 5 m)
   single: 130,            // half size of the single map when cascades are unavailable / off
-  nearMapSize: 2048, farMapSize: 4096, singleMapSize: 4096,
-  nearRadius: 2.0, farRadius: 1.4,
-  lead: 0.45, farLead: 0.55, // boxes lead the camera's view direction by this fraction of their half size
-  farMaxY: 40,            // far box centre height cap (m)
-  kernel: 'pcf',          // 'fast': 5 hardware-compare taps per lookup instead of three's 17 (setShadowKernel)
+  nearMapSize: 2048, midMapSize: 2048, farMapSize: 4096, singleMapSize: 4096,
+  nearRadius: 2.0, midRadius: 1.7, farRadius: 1.4,
+  lead: 0.45, farLead: 0.55, // boxes lead the camera's view direction by this fraction of their half size (middle: farLead)
+  farMaxY: 40,            // far (and middle) box centre height cap (m)
+  kernel: 'pcf',          // 'fast': 5 hardware-compare taps per lookup instead of three's 17; 'pcss': contact-hardening
+                          // soft shadows (setShadowKernel, shadowKernel.js)
+  lightSize: 0.5,         // 'pcss': angular diameter of the sun (degrees): penumbra width per metre of caster distance
+  maxPenumbra: 24,        // 'pcss': widest penumbra in near-map texels (the same width in metres on the other maps)
+  temporalNoise: false,   // 'pcss': re-seed the per-pixel sample rotation every frame (with dt > 0), for TAA to average
 };
 
 export class Atmosphere {
@@ -277,8 +290,8 @@ export class Atmosphere {
    *        environment map, sky cube, horizon sampling or lens flare)
    * @param {THREE.Camera} [o.camera]  cascades lead its view direction; lens flare
    * @param {number|string} [o.timeOfDay='golden']  hours 0..24 or a preset name (timePresets)
-   * @param {object} [o.shadows]  { cascades: 2|1, near (m), far (m or [m by height step]), kernel: 'pcf'|'fast', ... }
-   *        see DEFAULT_SHADOWS
+   * @param {object} [o.shadows]  { cascades: 1|2|3|4, near (m), far (m or [m by height step]), mid, kernel:
+   *        'pcf'|'fast'|'pcss', lightSize, maxPenumbra, ... } see DEFAULT_SHADOWS
    * @param {boolean} [o.build]  build immediately (default true for the options form, false for the legacy form)
    */
   constructor(o = {}, legacyRenderer, legacyOpts) {
@@ -290,7 +303,11 @@ export class Atmosphere {
     this.looks = opts.looks || DEFAULT_LOOKS;
     const sh = this.shadowOpts = { ...DEFAULT_SHADOWS, ...(opts.shadows || {}) };
     if (opts.shadowNearHalf != null) sh.near = opts.shadowNearHalf;
-    this.cascaded = sh.cascades > 1 && CASCADES;
+    const want = Math.max(1, Math.min(MAX_CASCADES, Math.floor(Number(sh.cascades)) || 1));
+    this.cascaded = want > 1 && CASCADES;
+    // cascades in use: 3 / 4 upgrade the global chunk patch (2 keeps its 0.6.0 text); 1 when unavailable / off
+    this.cascadeCount = !this.cascaded ? 1 : want > 2 && installCascadeShadowChunk(want) ? want : 2;
+    this.cascadeLights = []; // shadow-casting sun lights in three's shadow order: near, middle..., far (build)
     this.shadowKernel = 'pcf'; // kernel in effect; build() selects sh.kernel through setShadowKernel
     const t = opts.timeOfDay ?? 'golden';
     this.hours = typeof t === 'number' ? t : this.timePresets[t] ?? this.timePresets.golden ?? TIME_PRESETS.golden;
@@ -324,7 +341,8 @@ export class Atmosphere {
     this._farDirty = true;
     this._lastT = 0;
     this._clock = 0;
-    this._fastDepth = null; this._fastMaps = null; this._onChildAdded = null; // 'fast' shadow kernel state
+    this._fastDepth = null; this._fastMaps = null; this._onChildAdded = null; // 'fast' / 'pcss' shadow kernel state
+    this._pcss = null; this._noiseFrame = 0;
     this.flareScale = 1;
     if (opts.build ?? !legacy) this.build();
   }
@@ -357,19 +375,25 @@ export class Atmosphere {
     this._setBox(this.sun, this.nearHalf);
     this.sun.shadow.radius = sh.nearRadius;
     scene.add(this.sun, this.sun.target);
-    // far cascade: shadow-only (black) light that the patched lighting chunk reads for distant receivers
+    this.cascadeLights.length = 0;
+    this.cascadeLights.push(this.sun);
+    // middle + far cascades: shadow-only (black) lights that the patched lighting chunk reads beyond the near box,
+    // added in cascade order (three numbers directional shadows in scene order: near 0 ... far N-1)
     if (this.cascaded) {
-      this.sunFar = new THREE.DirectionalLight(0x000000, 0);
-      this.sunFar.name = 'sunFarCascade';
-      this.sunFar.castShadow = true;
-      const fm = Math.min(sh.farMapSize, maxTex);
-      this.sunFar.shadow.mapSize.set(fm, fm);
-      this._setBox(this.sunFar, this._farHalf);
-      this.sunFar.shadow.radius = sh.farRadius;
-      this.sunFar.shadow.autoUpdate = false;
-      this.sunFar.shadow.needsUpdate = true;
+      const n = this.cascadeCount, fm = Math.min(sh.farMapSize, maxTex), mm = Math.min(sh.midMapSize, maxTex);
+      this.midHalfSteps = this._midHalfSteps(nearMap, mm, fm);
+      for (let j = 1; j < n - 1; j++) {
+        const key = j === 1 ? 'sunMid' : 'sunMid2';
+        const l = this[key] = this._cascadeLight(`${key}Cascade`, mm, this.midHalfSteps[j - 1][0], sh.midRadius);
+        scene.add(l, l.target);
+        this.cascadeLights.push(l);
+      }
+      this.sunFar = this._cascadeLight('sunFarCascade', fm, this._farHalf, sh.farRadius);
       scene.add(this.sunFar, this.sunFar.target);
+      this.cascadeLights.push(this.sunFar);
     }
+
+    if (this.cascaded) this._checkShadowOrder();
 
     this.hemi = new THREE.HemisphereLight(0xbfd4ff, 0x4a4036, 0.3);
     scene.add(this.hemi);
@@ -413,23 +437,34 @@ export class Atmosphere {
   }
 
   /**
-   * Sun shadow filter: 'pcf' (three's 17-tap PCF, the default) or 'fast' (5 hardware-compare taps on a depth texture
-   * under each cascade map, shadowKernel.js). Switches every lit material under `root` (default: this scene) through
-   * its ENGINE_SHADOW_FAST define, so it also works at runtime for A/B: the first switch compiles the other program of
-   * each material, later switches reuse both. While 'fast' is on, objects added to the scene follow ('childadded');
-   * a mesh added under an object already in the scene, or a material swapped onto a mesh, keeps its kernel until the
-   * next call. 'fast' needs a renderer, PCFShadowMap and the sun (+ far cascade) as the scene's only shadow-casting
-   * directional lights; otherwise it warns and selects 'pcf'. Returns the number of materials switched.
+   * Sun shadow filter: 'pcf' (three's 17-tap PCF, the default), 'fast' (5 hardware-compare taps on a depth texture
+   * under each cascade map) or 'pcss' (contact-hardening soft shadows: blocker search on the packed map + compare taps
+   * on the depth texture, sized by shadows.lightSize / maxPenumbra), shadowKernel.js. Switches every lit material
+   * under `root` (default: this scene) through its ENGINE_SHADOW_FAST / ENGINE_SHADOW_PCSS define, so it also works at
+   * runtime for A/B: the first switch compiles the other program of each material, later switches reuse them. While
+   * 'fast' / 'pcss' is on, objects added to the scene follow ('childadded'); a mesh added under an object already in
+   * the scene, or a material swapped onto a mesh, keeps its kernel until the next call. 'fast' and 'pcss' need a
+   * renderer, PCFShadowMap and the sun's cascade lights as the scene's only shadow-casting directional lights (also
+   * checked for objects added later: the kernel then falls back); 'pcss' also needs 2 texture units per cascade with
+   * more than 8 left for materials. Otherwise they warn and select 'pcf'. Returns the number of materials switched.
    */
   setShadowKernel(kernel, root = this.scene) {
-    if (kernel !== 'pcf' && kernel !== 'fast') { console.warn(`[Atmosphere] unknown shadow kernel '${kernel}' ('pcf' | 'fast')`); return 0; }
-    if (kernel === 'fast' && !this._fastShadowsOk()) kernel = 'pcf';
+    if (!SHADOW_KERNELS.includes(kernel)) { console.warn(`[Atmosphere] unknown shadow kernel '${kernel}' ('pcf' | 'fast' | 'pcss')`); return 0; }
+    if (kernel !== 'pcf' && !this._fastShadowsOk(kernel)) kernel = 'pcf';
     this.shadowKernel = kernel;
     const s = this.scene;
-    if (kernel === 'fast') {
-      this._syncFastShadows(); // depth textures on the maps + the sampler array, before any material compiles 'fast'
+    if (kernel !== 'pcf') {
+      this._syncFastShadows(); // depth textures on the maps + the sampler array, before any material compiles the kernel
+      if (kernel === 'pcss') this._syncPcss();
       if (!this._onChildAdded && s) {
-        this._onChildAdded = (e) => applyShadowKernel(e.child, this.shadowKernel);
+        // a shadow-casting directional light added later would shift three's shadow order (its sampler2DShadow slot
+        // left unbound: INVALID_OPERATION): back to 'pcf'
+        this._onChildAdded = (e) => {
+          const other = this._foreignShadowLight(e.child);
+          if (other === null) { applyShadowKernel(e.child, this.shadowKernel); return; }
+          console.warn(`[Atmosphere] ${this.shadowKernel} shadow kernel unavailable (another shadow-casting directional light '${other}' was added), using 'pcf'`);
+          this.setShadowKernel('pcf');
+        };
         s.addEventListener('childadded', this._onChildAdded);
       }
     } else if (this._onChildAdded) {
@@ -439,42 +474,159 @@ export class Atmosphere {
     return applyShadowKernel(root, kernel);
   }
 
-  _fastShadowsOk() {
+  _fastShadowsOk(kernel = 'fast') {
     const r = this.renderer;
     let why = '';
     if (!r) why = 'no renderer';
     else if (!this.sun) why = 'not built yet';
     else if (r.shadowMap.type !== THREE.PCFShadowMap) why = 'it replaces PCFShadowMap only';
-    else if (!installFastShadowChunk()) why = 'three.js shadow chunks changed';
-    else {
+    else if (!(kernel === 'pcss' ? installPcssShadowChunk() : installFastShadowChunk())) why = 'three.js shadow chunks changed';
+    else if (kernel === 'pcss' && 2 * this.cascadeCount >= (r.capabilities?.maxTextures ?? 16) - PCSS_MATERIAL_UNITS) {
+      // both maps of every cascade are bound: 4 cascades + a full PBR set + clustered light textures exceed 16 units
+      why = `${2 * this.cascadeCount} shadow texture units leave ${PCSS_MATERIAL_UNITS} or fewer of ${r.capabilities?.maxTextures ?? 16} for materials`;
+    } else {
       // the sampler array mirrors three's directional shadow order, which this class only knows for its own lights
-      this.scene.traverse((o) => {
-        if (o.isDirectionalLight && o.castShadow && o !== this.sun && o !== this.sunFar) why = `another shadow-casting directional light '${o.name}'`;
-      });
+      const other = this._foreignShadowLight(this.scene);
+      if (other !== null) why = `another shadow-casting directional light '${other}'`;
     }
-    if (why) console.warn(`[Atmosphere] fast shadow kernel unavailable (${why}), using 'pcf'`);
+    if (why) console.warn(`[Atmosphere] ${kernel} shadow kernel unavailable (${why}), using 'pcf'`);
     return !why;
   }
 
-  // While 'fast' (per frame from update): each shadow-casting cascade keeps its depth texture (three re-creates a map
-  // without one after `shadow.map = null`) and the kernel's sampler array lists them in three's order, i.e. shadow
-  // casters in scene order: sun, then far cascade. Allocation-free unless a map has to be re-created.
+  // name of the first shadow-casting directional light under root that is not one of this atmosphere's cascades
+  _foreignShadowLight(root) {
+    let name = null;
+    const own = this.cascadeLights;
+    root.traverse((o) => { if (name === null && o.isDirectionalLight && o.castShadow && !own.includes(o)) name = o.name || '(unnamed)'; });
+    return name;
+  }
+
+  // three numbers directional shadows in scene order: a shadow-casting directional light before the sun takes index 0
+  // and the cascade blend never runs (only the near map is read). Warns once, from build().
+  _checkShadowOrder() {
+    let first = null;
+    this.scene.traverse((o) => { if (first === null && o.isDirectionalLight && o.castShadow) first = o; });
+    if (first && first !== this.sun) console.warn(`[Atmosphere] shadow-casting directional light '${first.name || '(unnamed)'}' precedes the sun in the scene: the shadow cascades will not be used (add it after the Atmosphere or turn its castShadow off)`);
+    return first === this.sun;
+  }
+
+  // While 'fast' / 'pcss' (per frame from update): each shadow-casting cascade keeps its depth texture (three
+  // re-creates a map without one after `shadow.map = null`) and the kernel's sampler array lists them in three's
+  // order, i.e. shadow casters in scene order: sun, middle cascades, far cascade. Allocation-free unless a map has to
+  // be re-created.
   _syncFastShadows() {
     if (this.renderer.shadowMap.type !== THREE.PCFShadowMap) return; // VSM / basic maps are three's alone
+    const L = this.cascadeLights;
     if (!this._fastDepth) {
       const rev = this.renderer.state?.buffers?.depth?.getReversed?.() === true;
-      this._fastDepth = [createShadowDepthTexture(rev), createShadowDepthTexture(rev)];
-      this._fastDepth[0].name = 'sun.shadowDepth'; this._fastDepth[1].name = 'sunFarCascade.shadowDepth';
-      this._fastMaps = [null, null];
+      this._fastDepth = L.map((l) => {
+        const d = createShadowDepthTexture(rev);
+        d.name = `${l.name}.shadowDepth`;
+        return d;
+      });
+      this._fastMaps = L.map(() => null);
     }
     let n = 0;
-    for (let i = 0; i < 2; i++) {
-      const light = i === 0 ? this.sun : this.sunFar;
-      if (!light || !light.castShadow) continue;
+    for (let i = 0; i < L.length; i++) {
+      const light = L[i];
+      if (!light.castShadow) continue;
       attachShadowDepth(light, this._fastDepth[i]);
       this._fastMaps[n++] = this._fastDepth[i];
     }
     setFastShadowMaps(this._fastMaps, n);
+  }
+
+  // 'pcss' constants per cascade (shadowKernel.js PCSS), from the boxes as they are now: penumbra texels per unit of
+  // normalised depth = depth range x tan(sun angular size) / texel; widest filter radius = half the widest penumbra,
+  // fixed in metres by maxPenumbra near-map texels; receiver-plane slope limit (tan 83 deg); noise seed. The depth
+  // range is the shadow camera's far - near, which _fitCascade only moves on changes over 50 m (as the projection),
+  // so x stays consistent with the map as rendered.
+  _syncPcss() {
+    const sh = this.shadowOpts, L = this.cascadeLights;
+    const P = this._pcss || (this._pcss = L.map(() => new THREE.Vector4()));
+    const tanT = Math.tan(Math.max(0, sh.lightSize) * DEG);
+    const maxW = sh.maxPenumbra * (2 * this.sun.userData.half / this.sun.shadow.mapSize.x);
+    const seed = sh.temporalNoise ? this._noiseFrame : 0;
+    let n = 0;
+    for (let i = 0; i < L.length; i++) {
+      const l = L[i];
+      if (!l.castShadow) continue;
+      const c = l.shadow.camera, texel = (2 * l.userData.half) / l.shadow.mapSize.x, range = c.far - c.near;
+      P[n++].set(range * tanT / texel, 0.5 * Math.min(sh.maxPenumbra, maxW / texel), 8 * texel / range, seed);
+    }
+    setPcssShadowParams(P, n);
+  }
+
+  /**
+   * The sun's shadow cascades, for passes that sample them (volumetric light, ...). Fills and returns `out` (reused:
+   * no allocation once its arrays have grown): count; per cascade (0 = near ... count - 1 = far, three's order)
+   * lights, cameras (shadow cameras), matrices (light.shadow.matrix: world -> map uv + depth in 0..1; the live
+   * object, valid for the map as last rendered), halfSizes (m), maps (the RGBA-packed colour maps: unpackRGBAToDepth,
+   * nearest; null before the first shadow render) and depthTextures: the DepthTextures a 'fast' / 'pcss' kernel
+   * attached (compare mode: sampler2DShadow, LEQUAL or GEQUAL with a reversed depth buffer), else the packed maps
+   * again; `packed` is true when any entry of depthTextures is a packed map.
+   * @param {{count: number, lights: THREE.DirectionalLight[], cameras: THREE.OrthographicCamera[], matrices: THREE.Matrix4[], halfSizes: number[], maps?: (THREE.Texture|null)[], depthTextures: (THREE.Texture|null)[], packed?: boolean}} [out]
+   */
+  shadowCascadeInfo(out = { count: 0, lights: [], cameras: [], matrices: [], halfSizes: [], maps: [], depthTextures: [], packed: true }) {
+    const L = this.cascadeLights;
+    const lights = out.lights, cameras = out.cameras, matrices = out.matrices, halfSizes = out.halfSizes;
+    const maps = out.maps || (out.maps = []), depths = out.depthTextures;
+    let n = 0, packed = false;
+    for (let i = 0; i < L.length; i++) {
+      const l = L[i], s = l.shadow;
+      if (!l.castShadow) continue;
+      const map = s.map ? s.map.texture : null, depth = s.map && s.map.depthTexture ? s.map.depthTexture : null;
+      lights[n] = l; cameras[n] = s.camera; matrices[n] = s.matrix; halfSizes[n] = l.userData.half;
+      maps[n] = map; depths[n] = depth || map;
+      if (!depth) packed = true;
+      n++;
+    }
+    lights.length = cameras.length = matrices.length = halfSizes.length = maps.length = depths.length = n;
+    out.count = n;
+    out.packed = packed;
+    return out;
+  }
+
+  // a black, shadow-only cascade light (autoUpdate off: update() re-renders it round-robin)
+  _cascadeLight(name, mapSize, half, radius) {
+    const l = new THREE.DirectionalLight(0x000000, 0);
+    l.name = name;
+    l.castShadow = true;
+    l.shadow.mapSize.set(mapSize, mapSize);
+    this._setBox(l, half);
+    l.shadow.radius = radius;
+    l.shadow.autoUpdate = false;
+    l.shadow.needsUpdate = true;
+    return l;
+  }
+
+  // half sizes (m) of the middle cascades by far step: shadows.mid, else texel sizes in geometric progression from
+  // the near map to the far map, each box large enough to hold the previous one at the same height after the lead
+  // offsets (and at least 1.25x it), at most 0.8x the far one. update() keeps the heights close enough (see there).
+  _midHalfSteps(nearMap, midMap, farMap) {
+    const sh = this.shadowOpts, n = this.cascadeCount, out = [];
+    const spec = sh.mid == null ? null : Array.isArray(sh.mid) ? sh.mid : [sh.mid];
+    const tN = (2 * this.nearHalf) / nearMap;
+    for (let j = 1; j < n - 1; j++) {
+      const o = spec ? spec[j - 1] : null, prev = j === 1 ? null : out[j - 2];
+      out.push(this.farHalfSteps.map((F, s) => {
+        if (o != null) return Array.isArray(o) ? o[Math.min(s, o.length - 1)] : o;
+        const t = tN * Math.pow((2 * F) / farMap / tN, j / (n - 1));
+        const ph = prev ? prev[s] : this.nearHalf, pl = prev ? sh.farLead : sh.lead;
+        const lo = Math.max(1.25 * ph, (ph * (1 - pl)) / Math.max(0.05, 1 - sh.farLead) + 2); // +2 m: texel snapping
+        return Math.round(Math.min(Math.max((t * midMap) / 2, lo), 0.8 * F) / 5) * 5;
+      }));
+    }
+    return out;
+  }
+
+  // middle cascade boxes for a far step (they step with the far box)
+  _setMidBoxes(step) {
+    const L = this.cascadeLights;
+    for (let j = 1; j < L.length - 1; j++) {
+      const steps = this.midHalfSteps[j - 1], h = steps[Math.min(step, steps.length - 1)];
+      if (L[j].userData.half !== h) this._setBox(L[j], h);
+    }
   }
 
   _setBox(light, half) {
@@ -693,22 +845,46 @@ export class Atmosphere {
 
     this._frame++;
     if (this.sunFar) {
-      // far cascade box grows with altitude (quantised with hysteresis so texels stay stable)
+      // far (+ middle) cascade boxes grow with altitude (quantised with hysteresis so texels stay stable)
       const steps = this.farHalfSteps;
       let idx = steps.indexOf(this._farHalf);
       const up = sh.farUp, down = sh.farDown;
       if (idx < steps.length - 1 && cam.y > up[idx]) idx++;
       else if (idx > 0 && cam.y < down[idx - 1]) idx--;
-      if (steps[idx] !== this._farHalf) { this._farHalf = steps[idx]; this._setBox(this.sunFar, this._farHalf); this._farDirty = true; }
-      // re-render the far map every other frame (it is consistent with its own matrix in between)
-      if (this._farDirty || (this._frame & 1) === 0) {
-        const fh = this._farHalf, off = fh * sh.farLead;
-        this._fitCascade(this.sunFar, cam.x + fx * off, Math.min(cam.y, sh.farMaxY), cam.z + fz * off, fh);
-        this.sunFar.shadow.needsUpdate = true;
-        this._farDirty = false;
+      if (steps[idx] !== this._farHalf) { this._farHalf = steps[idx]; this._setBox(this.sunFar, this._farHalf); this._setMidBoxes(idx); this._farDirty = true; }
+      // maps beyond the near one re-render round-robin (each is consistent with its own matrix in between), all of
+      // them when dirty: 2 cascades: far on even frames; 3: middle on odd, far on even frames; 4: middle on odd
+      // frames, second middle and far on alternate even frames (one map besides the near one per frame). With 3+, a
+      // map whose box centre is 0.3 half sizes off (teleport, pose) refits at once (2 keeps the 0.6.0 schedule).
+      const L = this.cascadeLights, n = L.length, f = this._frame, dirty = this._farDirty;
+      const yCap = Math.min(cam.y, sh.farMaxY), farLead = sh.farLead;
+      let py = cam.y, ph = this.nearHalf, pl = sh.lead; // previous box: centre height, half size, lead
+      for (let j = 1; j < n; j++) {
+        const light = L[j], h = light.userData.half, off = h * farLead;
+        // far box centre: capped height (0.6.0). Middle boxes: as low as that cap, but no further below the previous
+        // box than the margin left by the half sizes and leads, so each still holds the previous one (the near box
+        // rides at camera height; a middle box at the cap alone would drop it between farMaxY and farUp[0])
+        let y = yCap;
+        if (j < n - 1) {
+          y = Math.max(yCap, py - Math.max(0, h * (1 - farLead) - ph * (1 - pl)));
+          py = y; ph = h; pl = farLead;
+        }
+        const x = cam.x + fx * off, z = cam.z + fz * off;
+        let due = dirty || (n === 2 ? (f & 1) === 0 : j === 1 ? (f & 1) === 1 : n === 3 ? (f & 1) === 0 : (f & 3) === (j === 2 ? 0 : 2));
+        if (!due && n > 2 && light.target.position.distanceToSquared(_focus.set(x, y, z)) > (0.3 * h) ** 2) due = true;
+        if (!due) continue;
+        this._fitCascade(light, x, y, z, h);
+        light.shadow.needsUpdate = true;
+      }
+      this._farDirty = false;
+    }
+    if (this.shadowKernel !== 'pcf') {
+      this._syncFastShadows();
+      if (this.shadowKernel === 'pcss') {
+        if (sh.temporalNoise && dt > 0) this._noiseFrame = (this._noiseFrame + 1) & 63;
+        this._syncPcss();
       }
     }
-    if (this.shadowKernel === 'fast') this._syncFastShadows();
     this._updateFlare(cam);
   }
 
@@ -754,12 +930,13 @@ export class Atmosphere {
 
   dispose() {
     const s = this.scene;
-    for (const o of [this.sky, this.sun, this.sun && this.sun.target, this.sunFar, this.sunFar && this.sunFar.target, this.hemi]) if (o && s) s.remove(o);
+    for (const o of [this.sky, this.hemi]) if (o && s) s.remove(o);
+    for (const l of this.cascadeLights) if (s) s.remove(l, l.target);
     if (s && (s.fog === this.fog || s.fog === this.fogPost)) s.fog = null;
     if (s && this._onChildAdded) { s.removeEventListener('childadded', this._onChildAdded); this._onChildAdded = null; } // materials keep their define
     if (s && this.envRT && s.environment === this.envRT.texture) s.environment = null;
     for (const o of [this.sky, this.envSky]) if (o) o.material.dispose();
-    for (const l of [this.sun, this.sunFar]) if (l) l.dispose();
+    for (const l of this.cascadeLights) l.dispose();
     if (this.envRT) this.envRT.dispose();
     if (this.skyCubeRT) this.skyCubeRT.dispose();
     if (this.pmrem) this.pmrem.dispose();
@@ -768,5 +945,6 @@ export class Atmosphere {
   }
 }
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _c = new THREE.Vector3(), _v = new THREE.Vector3();
+const _focus = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0), _x = new THREE.Vector3(1, 0, 0);
 const _white = new THREE.Color(1, 1, 1);

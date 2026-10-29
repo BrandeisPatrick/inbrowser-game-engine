@@ -24,6 +24,9 @@
 // Phase hooks then see only the tiles built at load (within streaming.spawnRadius of the spawn, plus pinned ones):
 // a plugin that edits merged building geometry needs its tiles pinned (streaming.pin), or they are rebuilt unedited.
 // Traffic simulates in a Web Worker by default (Traffic.js / TrafficSim.js / traffic.worker.js).
+// Lamp lights: the 8 nearest visible lamps are real PointLights (NearestLights pool, ENGINE.md Conventions); opt-in
+// `lights: { clustered: true }` makes every lamp within clusteredRange of the camera a render/ClusteredLights light
+// instead (world.clustered; the world updates it per frame from atmo.camera; call world.setSize on resize).
 // Coordinates: world = bake frame - world.offset (the spawn point is the origin).
 import * as THREE from 'three';
 import { Atmosphere, TIME_PRESETS } from '../render/Atmosphere.js';
@@ -137,6 +140,16 @@ export class MapWorld {
    * @param {boolean} [o.physics=false]  true: build `world.physics` (PhysicsWorld.fromWorld) at the end of load()
    * @param {object|boolean} [o.streaming]  building tiles built around the camera instead of all at load (default on
    *        with a renderer; false or ?nostream=1 = build everything at load): DEFAULT_STREAMING fields
+   * @param {object} [o.lights]  lamp lights: { clustered: false | true | ClusteredLights, clusteredRange = 220,
+   *        clusteredFade = 30, cluster: ClusteredLights constructor options }. clustered false (default): the 8-PointLight
+   *        pool. true: the world creates a render/ClusteredLights.js instance (world.clustered, loaded only then) and
+   *        every lamp within clusteredRange (m) of the camera is a cluster light; an instance is used as is (the world
+   *        neither creates nor disposes it). The world installs the cluster chunks (if three's light chunks changed:
+   *        warning, PointLight pool), sizes the instance to the drawing buffer at load, sets the clustered define on
+   *        the scene's lit materials after load (syncClustered: objects added later follow), calls
+   *        clustered.update(atmo.camera) at the end of update() and forwards setSize(). Clustered mode needs
+   *        `world.atmo.camera` (world.system({ camera }) sets it after load, or `atmosphere: { camera }`): without
+   *        it the lamps do not light (warned once at night). setLightMode('pool' | 'clustered') switches at runtime.
    */
   constructor(o = {}) {
     this.scene = o.scene;
@@ -168,6 +181,8 @@ export class MapWorld {
     this.loaded = false;
     this.streamOpts = streamingOptions(o);
     this.streamer = null;
+    this.clustered = null;   // render/ClusteredLights.js instance (o.lights.clustered), null = PointLight pool
+    this._CL = null; this._clusterOn = false; this._clusterNoCam = false;
   }
 
   // ================================================================== load
@@ -249,9 +264,11 @@ export class MapWorld {
 
     P(0.86, 'Street furniture');
     const PO = o.props || {}, VO = o.vegetation || {};
+    const LO = await this._initClustered(); // null unless o.lights.clustered
     this.props = new Props({
       net: this.net, raster: this.raster, colliders: this.colliders, data, isLand: (x, z) => this.isLand(x, z), groundAt: (x, z) => this._groundAt(x, z),
       seed: PO.seed ?? 4242, streets: PO.streets || null, signStyle: PO.signStyle || null, treeRules: VO.rules || null, treeMix: VO.mix || null,
+      lights: LO,
     });
     this.group.add(this.props.build());
     await tick();
@@ -284,6 +301,7 @@ export class MapWorld {
       sp.y = this.getGroundHeight(sp.x, sp.z, this._groundAt(sp.x, sp.z));
     }
     this.scene.add(this.group);
+    if (this._clusterOn) this._CL.syncClustered(this.scene, true); // deep 'childadded' listeners: streamed tiles follow
     this._applyTime();
     this.loaded = true;
     if (o.physics) this.createPhysics();
@@ -304,6 +322,59 @@ export class MapWorld {
     };
     console.info('[MapWorld] ready', this.stats);
     P(1, 'Ready');
+  }
+
+  // ================================================================== clustered lamp lights (o.lights)
+  /**
+   * o.lights.clustered: load render/ClusteredLights.js (only then: the default build never imports it), install its
+   * shader chunks, create (true) or adopt (an instance) world.clustered. Returns the Props `lights` option or null.
+   */
+  async _initClustered() {
+    const L = this.opts.lights;
+    if (!L || !L.clustered) return null;
+    try {
+      const M = await import('../render/ClusteredLights.js');
+      if (!M.installClusteredChunks()) throw new Error('clustered chunks unavailable (three.js light chunks changed)');
+      this.clustered = L.clustered === true ? new M.ClusteredLights(L.cluster || {}) : L.clustered;
+      // the scene target's size until world.setSize (a passed instance too: its default size maps the tiles wrongly)
+      if (this.renderer) { const v = this.renderer.getDrawingBufferSize(new THREE.Vector2()); this.clustered.setSize(v.x, v.y); }
+      this._CL = M; this._clusterOn = true;
+    } catch (e) {
+      console.warn('[MapWorld] clustered lights unavailable, lamps use the PointLight pool', e);
+      this.clustered = null; this._CL = null; this._clusterOn = false;
+      return null;
+    }
+    return { clustered: this.clustered, clusteredRange: L.clusteredRange, clusteredFade: L.clusteredFade };
+  }
+
+  /**
+   * Lamp lights at runtime (A/B): 'pool' (8 real PointLights, the default build's look) or 'clustered' (needs
+   * world.clustered, i.e. the `lights.clustered` option). Switches the lamp pool, the clustered define on the scene's
+   * materials (syncClustered; each material compiles its other program once) and clustered.enabled; switching to
+   * 'pool' also runs clustered.update(null), which zeroes the shared light count (engineClParams2.w), so a material
+   * that kept the define (outside the scene at the switch, or user-applied) loops over no lights. Returns the mode in effect.
+   * @param {'pool'|'clustered'} mode
+   */
+  setLightMode(mode) {
+    const LP = this.props && this.props.lightPool;
+    if (!LP) return null;
+    if (!this.clustered || (mode !== 'pool' && mode !== 'clustered')) return LP.mode;
+    const on = LP.setMode(mode, this.clustered) === 'clustered';
+    if (on !== this._clusterOn) {
+      this._clusterOn = on; this.clustered.enabled = on;
+      this._CL.syncClustered(this.scene, on);
+      if (!on) this.clustered.update(null);
+    }
+    return LP.mode;
+  }
+
+  /**
+   * Render size for size-dependent world helpers (the clustered light grid: world.clustered.setSize in drawing-buffer
+   * pixels, floor(css * pixelRatio) as PostFX). Call it from the resize handler, e.g.
+   * engine.onResize = (w, h, pr) => { postfx.setSize(w, h, pr); world.setSize(w, h, pr); }. No-op without world.clustered.
+   */
+  setSize(width, height, pixelRatio = 1) {
+    if (this.clustered) this.clustered.setSize(Math.max(1, Math.floor(width * pixelRatio)), Math.max(1, Math.floor(height * pixelRatio)));
   }
 
   /** Traffic options normalised from o.traffic (number = count, false = none, object = options). */
@@ -1013,6 +1084,13 @@ diffuseColor.rgb *= (0.85 + 0.3 * texture2D(map, vMapUv * 0.071 + 0.13).g) * mix
       pl.update(dt, cameraPos, this.atmo.darkness, this);
     }
     if (this.traffic) this.traffic.update(dt, cameraPos, this.atmo.darkness);
+    if (this._clusterOn) { // after every system pushed its lights (update() refreshes the camera's world matrix)
+      if (this.atmo.camera) this.clustered.update(this.atmo.camera);
+      else if (!this._clusterNoCam && this.atmo.darkness > 0.3) {
+        this._clusterNoCam = true;
+        console.warn('[MapWorld] lights.clustered needs world.atmo.camera (world.system({ camera }) or atmosphere: { camera }): the lamps do not light without it');
+      }
+    }
   }
 
   /**

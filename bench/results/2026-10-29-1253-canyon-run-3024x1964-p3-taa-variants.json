@@ -1,0 +1,417 @@
+{
+  "page": "canyon-run",
+  "label": "p3-taa-variants",
+  "date": "2026-10-29T16:53:20.325Z",
+  "url": "http://localhost:5190/canyon-run/?gbuffer=1&aa=taa&bench=1&size=3024x1964",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 20471,
+  "reloads": 0,
+  "poses": [
+    "straight",
+    "chase",
+    "aerial",
+    "ahead"
+  ],
+  "settings": [
+    {
+      "label": "default",
+      "set": {}
+    },
+    {
+      "label": "early",
+      "set": {
+        "taa.reject": "early"
+      }
+    },
+    {
+      "label": "snap",
+      "set": {
+        "taa.snap": true
+      }
+    },
+    {
+      "label": "velocityFirst",
+      "set": {
+        "taa.velocityFirst": true
+      }
+    },
+    {
+      "label": "early+vf",
+      "set": {
+        "taa.reject": "early",
+        "taa.velocityFirst": true
+      }
+    },
+    {
+      "label": "all3",
+      "set": {
+        "taa.reject": "early",
+        "taa.velocityFirst": true,
+        "taa.snap": true
+      }
+    },
+    {
+      "label": "single",
+      "set": {
+        "taa.reject": "single"
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "default",
+      "pose": "straight",
+      "ms": 10.892,
+      "fps": 91.81,
+      "hash": "f9b037cc",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null
+    },
+    {
+      "setting": "default",
+      "pose": "chase",
+      "ms": 11.421,
+      "fps": 87.56,
+      "hash": "a6308732",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null
+    },
+    {
+      "setting": "default",
+      "pose": "aerial",
+      "ms": 11.567,
+      "fps": 86.46,
+      "hash": "95d02cd9",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null
+    },
+    {
+      "setting": "default",
+      "pose": "ahead",
+      "ms": 8.092,
+      "fps": 123.58,
+      "hash": "162b3380",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null
+    },
+    {
+      "setting": "early",
+      "pose": "straight",
+      "ms": 10.917,
+      "fps": 91.6,
+      "hash": "7aaa2f56",
+      "meanAbs": 0.0026,
+      "p99": 0.042,
+      "max": 19.25,
+      "pctOver2": 0.007,
+      "pctOver8": 0.001
+    },
+    {
+      "setting": "early",
+      "pose": "chase",
+      "ms": 11.408,
+      "fps": 87.66,
+      "hash": "c8e32607",
+      "meanAbs": 0.0012,
+      "p99": 0.021,
+      "max": 1.521,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "early",
+      "pose": "aerial",
+      "ms": 11.612,
+      "fps": 86.11,
+      "hash": "c6631c67",
+      "meanAbs": 0.0006,
+      "p99": 0.021,
+      "max": 0.604,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "early",
+      "pose": "ahead",
+      "ms": 8.129,
+      "fps": 123.01,
+      "hash": "94a56e64",
+      "meanAbs": 0.0018,
+      "p99": 0.042,
+      "max": 0.604,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "snap",
+      "pose": "straight",
+      "ms": 10.729,
+      "fps": 93.2,
+      "hash": "164dbc08",
+      "meanAbs": 0.0029,
+      "p99": 0.042,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001
+    },
+    {
+      "setting": "snap",
+      "pose": "chase",
+      "ms": 11.158,
+      "fps": 89.62,
+      "hash": "09a2c31a",
+      "meanAbs": 0.0015,
+      "p99": 0.021,
+      "max": 3.438,
+      "pctOver2": 0.001,
+      "pctOver8": 0
+    },
+    {
+      "setting": "snap",
+      "pose": "aerial",
+      "ms": 11.454,
+      "fps": 87.3,
+      "hash": "21c9a466",
+      "meanAbs": 0.0008,
+      "p99": 0.021,
+      "max": 0.521,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "snap",
+      "pose": "ahead",
+      "ms": 7.921,
+      "fps": 126.25,
+      "hash": "d585733d",
+      "meanAbs": 0.0021,
+      "p99": 0.042,
+      "max": 0.625,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "velocityFirst",
+      "pose": "straight",
+      "ms": 11.013,
+      "fps": 90.81,
+      "hash": "16a44e4d",
+      "meanAbs": 0.0005,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001
+    },
+    {
+      "setting": "velocityFirst",
+      "pose": "chase",
+      "ms": 11.329,
+      "fps": 88.27,
+      "hash": "a6308732",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "velocityFirst",
+      "pose": "aerial",
+      "ms": 11.646,
+      "fps": 85.87,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "velocityFirst",
+      "pose": "ahead",
+      "ms": 8.092,
+      "fps": 123.58,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "early+vf",
+      "pose": "straight",
+      "ms": 11.012,
+      "fps": 90.81,
+      "hash": "7aaa2f56",
+      "meanAbs": 0.0026,
+      "p99": 0.042,
+      "max": 19.25,
+      "pctOver2": 0.007,
+      "pctOver8": 0.001
+    },
+    {
+      "setting": "early+vf",
+      "pose": "chase",
+      "ms": 11.433,
+      "fps": 87.46,
+      "hash": "c8e32607",
+      "meanAbs": 0.0012,
+      "p99": 0.021,
+      "max": 1.521,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "early+vf",
+      "pose": "aerial",
+      "ms": 11.7,
+      "fps": 85.47,
+      "hash": "c6631c67",
+      "meanAbs": 0.0006,
+      "p99": 0.021,
+      "max": 0.604,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "early+vf",
+      "pose": "ahead",
+      "ms": 8.279,
+      "fps": 120.79,
+      "hash": "94a56e64",
+      "meanAbs": 0.0018,
+      "p99": 0.042,
+      "max": 0.604,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "all3",
+      "pose": "straight",
+      "ms": 10.887,
+      "fps": 91.85,
+      "hash": "164dbc08",
+      "meanAbs": 0.0029,
+      "p99": 0.042,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001
+    },
+    {
+      "setting": "all3",
+      "pose": "chase",
+      "ms": 11.254,
+      "fps": 88.86,
+      "hash": "09a2c31a",
+      "meanAbs": 0.0015,
+      "p99": 0.021,
+      "max": 3.438,
+      "pctOver2": 0.001,
+      "pctOver8": 0
+    },
+    {
+      "setting": "all3",
+      "pose": "aerial",
+      "ms": 11.533,
+      "fps": 86.71,
+      "hash": "21c9a466",
+      "meanAbs": 0.0008,
+      "p99": 0.021,
+      "max": 0.521,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "all3",
+      "pose": "ahead",
+      "ms": 8.075,
+      "fps": 123.84,
+      "hash": "d585733d",
+      "meanAbs": 0.0021,
+      "p99": 0.042,
+      "max": 0.625,
+      "pctOver2": 0,
+      "pctOver8": 0
+    },
+    {
+      "setting": "single",
+      "pose": "straight",
+      "ms": 10.85,
+      "fps": 92.17,
+      "hash": "f7b498eb",
+      "meanAbs": 0.0047,
+      "p99": 0.042,
+      "max": 19.25,
+      "pctOver2": 0.018,
+      "pctOver8": 0.002
+    },
+    {
+      "setting": "single",
+      "pose": "chase",
+      "ms": 11.283,
+      "fps": 88.63,
+      "hash": "a807a748",
+      "meanAbs": 0.002,
+      "p99": 0.021,
+      "max": 9.313,
+      "pctOver2": 0.002,
+      "pctOver8": 0
+    },
+    {
+      "setting": "single",
+      "pose": "aerial",
+      "ms": 11.525,
+      "fps": 86.77,
+      "hash": "2d14b9b6",
+      "meanAbs": 0.0012,
+      "p99": 0.021,
+      "max": 4.313,
+      "pctOver2": 0.002,
+      "pctOver8": 0
+    },
+    {
+      "setting": "single",
+      "pose": "ahead",
+      "ms": 7.992,
+      "fps": 125.13,
+      "hash": "1b430642",
+      "meanAbs": 0.0042,
+      "p99": 0.042,
+      "max": 10.854,
+      "pctOver2": 0.02,
+      "pctOver8": 0.001
+    }
+  ],
+  "base": {
+    "reject": "quad",
+    "snap": false,
+    "velocityFirst": false
+  },
+  "note": "TAA knob variants on the ?gbuffer=1&aa=taa page; diff against the default TAA output at the same pose (scale 4)"
+}

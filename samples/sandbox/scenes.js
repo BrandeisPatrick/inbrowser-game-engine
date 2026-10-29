@@ -53,12 +53,15 @@ export class BodyPools {
    * @param {THREE.Scene} scene
    * @param {object} dyn  DynamicsClient (getPose, isAwake)
    * @param {object} [o]  interpolate (default true; false for a worker client), fixedDt (s, worker extrapolation),
-   *   textures { box, round }
+   *   textures { box, round }, velocity (InstancedPool({ velocity: true }): previous instance matrices for G-buffer
+   *   velocity, default false), onBucket(pool) called for every pool created (now and later: PostFX.trackPool)
    */
   constructor(scene, dyn, o = {}) {
     this.scene = scene; this.dyn = dyn;
     this.interpolate = o.interpolate !== false;
     this.fixedDt = o.fixedDt || 1 / 60;
+    this.velocity = !!o.velocity;
+    this.onBucket = o.onBucket || null;
     const tex = o.textures || {};
     this.boxMaterial = new THREE.MeshStandardMaterial({ map: tex.box || null, roughness: 0.72, metalness: 0.02 });
     this.roundMaterial = new THREE.MeshStandardMaterial({ map: tex.round || null, roughness: 0.5, metalness: 0.05 });
@@ -71,11 +74,12 @@ export class BodyPools {
   }
 
   _bucket(geometry, material, name) {
-    const pool = new InstancedPool(geometry, material, { capacity: 64, colors: true, castShadow: true, cullRadius: 2.5, name });
+    const pool = new InstancedPool(geometry, material, { capacity: 64, colors: true, castShadow: true, cullRadius: 2.5, name, velocity: this.velocity });
     pool.mesh.visible = false;
     this.scene.add(pool.mesh);
     const b = { pool, owners: [] };     // owners[slot] = record
     this.buckets.push(b);
+    if (this.onBucket) this.onBucket(pool);
     return b;
   }
   _capsule(r, hh) {

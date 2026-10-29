@@ -6,6 +6,7 @@
 //  - impostors: camera-facing billboards picking/blending baked views (8 azimuths x 3 elevations)
 import * as THREE from 'three';
 import { ShaderChunk } from 'three';
+import { GBUFFER_VERTEX_TAIL } from '../render/GBuffer.js'; // G-buffer velocity varyings for shaders that replace project_vertex
 
 const COMMON_PARS = /* glsl */`
 float vegIGN( vec2 p ) { return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) ); }
@@ -99,7 +100,7 @@ vec4 mvPosition = vec4( transformed, 1.0 );
 mvPosition.xyz += vegWind;
 mvPosition = modelViewMatrix * mvPosition;
 gl_Position = projectionMatrix * mvPosition;
-`;
+` + GBUFFER_VERTEX_TAIL;
 
 const VEG_WORLDPOS = /* glsl */`
 #if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || NUM_SPOT_LIGHT_COORDS > 0
@@ -257,7 +258,7 @@ if ( vFade <= 0.0 ) transformed = impC;
 const IMP_PROJECT = /* glsl */`
 vec4 mvPosition = modelViewMatrix * vec4( transformed, 1.0 );
 gl_Position = projectionMatrix * mvPosition;
-`;
+` + GBUFFER_VERTEX_TAIL;
 
 const IMP_WORLDPOS = /* glsl */`
 #if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || NUM_SPOT_LIGHT_COORDS > 0

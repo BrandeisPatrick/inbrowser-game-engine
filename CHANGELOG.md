@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.7.0 — 2026-10-29
+Render foundations (phase 3 of the 1.0 roadmap, ENGINE.md "Render pipeline (0.7.0)"): a G-buffer path with TAA,
+clustered lighting for hundreds of lights, 2-4 shadow cascades with a PCSS kernel, and GPU particles. Every knob is
+opt-in and the forward path renders bit-identically to 0.6.0 (same-page A/B diffs 0 / 0.0005 mean).
+- Render: `PostFX({ gbuffer: false, aa: 'auto' | 'msaa' | 'fxaa' | 'taa', taa: { blend, clamp, sharpen, filter,
+  historyFormat, stableDepth }, jitter })` — the MRT scene pass (`GBuffer`: colour + octahedral normal / roughness /
+  metalness / flags + velocity), `CameraHistory` jitter and matrices, `TAAPass` (Catmull-Rom history, variance
+  clip, velocity or depth reprojection), `postfx.set(path, value)` knobs, `atmosphere: null` support. Canyon Run at
+  3024x1964 (FXAA default): G-buffer + FXAA +0.3-0.5 ms with identical colour, G-buffer + TAA +2.2-2.5 ms (10.65 /
+  11.09 / 11.38 / 7.83 ms vs 8.25 / 8.62 / 8.80 / 5.60); at 2560x1440 (4x MSAA default) the G-buffer path is
+  cheaper than MSAA: + FXAA -1.2-1.7 ms, + TAA -0.2-0.4 ms. `taa.{stableDepth, reject, snap, velocityFirst}` are
+  measured knobs, all off (≤ 0.15 ms either way on static poses).
+  `InstancedPool({ velocity: true })` + `postfx.trackPool(pool)` and `postfx.track(mesh)` give moving objects their
+  own velocity (PostFX keeps the lists and replays them whenever the G-buffer is rebuilt).
+- Render: `ClusteredLights` — up to 1024 point / spot lights in a froxel grid, +2 texture units, a global chunk
+  patch under `ENGINE_CLUSTERED` calling three's own `RE_Direct`: 8 clustered lights match 8 real PointLights
+  pixel-exactly. World: `MapWorld({ lights: { clustered: true, clusteredRange } })` and `NearestLights({ mode:
+  'clustered' })` light every lamp in range instead of the nearest 8: the night city with every lamp within 220 m
+  costs +0.6 / +1.0 / 0.0 ms over the pool at 3024x1964 (11.69 / 12.43 / 11.28 vs 11.12 / 11.46 / 11.29).
+  `world.setLightMode` switches at runtime; `npm run smoke` runs the clustered night page.
+- Render: `shadows.cascades: 1-4` (middle cascades, round-robin updates; 3: +0.2-0.5 ms, 4: +0.3-0.9 ms, pixel
+  change 0.003-0.017 mean) and `kernel: 'pcss'` (blocker search + contact-hardening penumbra: 9.1-10.5 ms vs
+  'fast' 8.2-8.8 and 'pcf' 9.9-10.9 in Canyon Run at 3024x1964); `atmo.shadowCascadeInfo(out)`; the 2-cascade
+  'pcf' chunk text is byte-identical to 0.6.0 (pinned by `test/shadows.mjs`).
+- Render: `GpuParticleSystem` — the `ParticleSystem` API over GPUComputationRenderer (65k particles, deterministic
+  slots, depth collision), matches the CPU system to 1e-5 m; 0.2 ms CPU for 65k live + 4096 spawns per frame.
+- Samples: `?gbuffer=1`, `?aa=`, `?cascades=`, `?shadows=pcss` on every sample (the car, the character and the
+  sandbox's instanced bodies are velocity sources); city `?clustered[&range=]`;
+  harness `quiet` hooks reset the TAA history and converge 32 frames so captures reproduce.
+- Tooling: samples freeze the loop at `setReady()` under `?bench=1` and every harness setting has a getter, so
+  captures reproduce across page loads (Canyon Run's car poses differed by up to 0.28 mean before) and
+  `__sample.run(plan)` restores knobs between settings (see ENGINE.md "Measurement protocol"); `npm run smoke`
+  gains a `city-clustered` night page with an in-page clustered-lights check.
+- Tests: `gbuffer-chunks` (251 checks), `clustered` (93), `shadows`, `postfx-options` (141), `gpu-particles`
+  (63), `world-lights` (63); `npm test` runs 21 suites.
+
 ## 0.6.0 — 2026-10-29
 Unified XPBD rigid-body dynamics (phase 2 of the 1.0 roadmap, ENGINE.md "Physics" / "DynamicsWorld"): a pure-JS,
 deterministic, Node-testable solver that plugs into the existing `PhysicsWorld` so the vehicle and character

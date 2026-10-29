@@ -19,6 +19,7 @@
 import * as THREE from 'three';
 import { FACADE, WIN_RECTS, PBR, PBR_SETS } from './FacadeTextures.js';
 import { signedArea, sanitizeRing, pointInPoly, ringBounds, centroid, clamp, hashStr, mulberry32 } from './geom.js';
+import { GBUFFER_CHUNK_TAILS } from '../render/GBuffer.js'; // G-buffer captures for the chunks this material replaces
 
 export const MODE = { WALL: 0, WALLONLY: 1, PANE: 2, PLAIN: 3, GRATE: 4, SIGN: 5, CLOCK: 6, CURTAIN: 7, LED: 8 };
 /** 4th component of aInfo: PBR layer + 64 * mode */
@@ -398,8 +399,8 @@ export function createFacadeMaterials(tex, pbr) {
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>\n${GLSL_COMMON}`)
         .replace('#include <map_fragment>', FRAG_MAIN)
-        .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = fRough;')
-        .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = fMetal;')
+        .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = fRough;' + GBUFFER_CHUNK_TAILS.roughnessmap_fragment)
+        .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = fMetal;' + GBUFFER_CHUNK_TAILS.metalnessmap_fragment)
         .replace('#include <normal_fragment_maps>', `{
   vec3 q0 = dFdx(-vViewPosition), q1 = dFdy(-vViewPosition);
   vec2 st0 = dFdx(vWuv), st1 = dFdy(vWuv);
@@ -410,7 +411,7 @@ export function createFacadeMaterials(tex, pbr) {
   vec2 nxy = fNxy * fNStr;
   vec3 mapN = vec3(nxy, sqrt(max(0.0, 1.0 - dot(nxy, nxy))));
   normal = normalize(T * (mapN.x * sc) + Bt * (mapN.y * sc) + normal * mapN.z);
-}`)
+}` + GBUFFER_CHUNK_TAILS.normal_fragment_maps)
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fEmis;')
         .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
 if (fGlass > 0.5) { material.specularColor = fSpec; material.specularF90 = 1.0; }`)

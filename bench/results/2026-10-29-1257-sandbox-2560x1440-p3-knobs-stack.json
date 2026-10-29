@@ -1,0 +1,136 @@
+{
+  "page": "sandbox",
+  "label": "p3-knobs-stack",
+  "date": "2026-10-29T16:57:29.562Z",
+  "url": "http://localhost:5190/sandbox/?scene=stack&gbuffer=1&bench=1&size=2560x1440",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 3578,
+  "reloads": 0,
+  "poses": [
+    "overview",
+    "close"
+  ],
+  "settings": [
+    {
+      "label": "forward-auto",
+      "set": {
+        "postfx.gbuffer": false,
+        "postfx.aa": "auto"
+      }
+    },
+    {
+      "label": "gbuffer-fxaa",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "fxaa"
+      }
+    },
+    {
+      "label": "gbuffer-taa",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa"
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "forward-auto",
+      "pose": "overview",
+      "ms": 4.612,
+      "fps": 216.8,
+      "hash": "1302fe0d",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "forward-auto",
+      "pose": "close",
+      "ms": 5.183,
+      "fps": 192.93,
+      "hash": "9193e54d",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "gbuffer-fxaa",
+      "pose": "overview",
+      "ms": 3.317,
+      "fps": 301.51,
+      "hash": "9892bc53",
+      "meanAbs": 0.2,
+      "p99": 3.271,
+      "max": 18.25,
+      "pctOver2": 1.782,
+      "pctOver8": 0.097,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "gbuffer-fxaa",
+      "pose": "close",
+      "ms": 3.675,
+      "fps": 272.11,
+      "hash": "db0164b6",
+      "meanAbs": 0.2216,
+      "p99": 4.333,
+      "max": 22.375,
+      "pctOver2": 2.796,
+      "pctOver8": 0.203,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "gbuffer-taa",
+      "pose": "overview",
+      "ms": 4.621,
+      "fps": 216.41,
+      "hash": "518b91b1",
+      "meanAbs": 0.1369,
+      "p99": 1,
+      "max": 16.958,
+      "pctOver2": 0.292,
+      "pctOver8": 0.018,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "gbuffer-taa",
+      "pose": "close",
+      "ms": 4.971,
+      "fps": 201.17,
+      "hash": "ecccaee6",
+      "meanAbs": 0.154,
+      "p99": 1.917,
+      "max": 14.792,
+      "pctOver2": 0.941,
+      "pctOver8": 0.093,
+      "drawCalls": 26,
+      "triangles": 2795
+    }
+  ],
+  "note": "page loaded with ?gbuffer=1 so the body pools carry per-instance velocity"
+}
