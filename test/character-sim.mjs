@@ -474,7 +474,10 @@ function assertSane(cc, label) {
   const boxes = [box(-2, 2.6, 2, 3, -2, 2)]; // a ceiling over the origin + a 5 x 5 field of kerbs, steps and walls
   const tops = [0.2, 0.3, 1.0, 2.0, 0.15];
   for (let i = 0; i < 5; i++) for (let k = 0; k < 5; k++) if (i !== 2 || k !== 2) boxes.push(box(-9 + i * 4, 0, -7.5 + i * 4, tops[(i + 2 * k) % 5], -9 + k * 4, -7.5 + k * 4));
-  const hill = (x, z) => 0.6 * Math.sin(x * 0.3) * Math.cos(z * 0.25);
+  // smooth periodic bumps from + - * / and Math.floor only (no Math.sin: V8's transcendentals differ between x64
+  // and arm64 at the last bit, which changed the golden hash between a Mac and the Linux CI runner)
+  const wave = (t) => { const s = t - Math.floor(t); return 16 * s * s * (1 - s) * (1 - s) * 2 - 1; };
+  const hill = (x, z) => 0.6 * wave(x * 0.3 / 6.2832) * wave(z * 0.25 / 6.2832);
   const world = makeWorld(boxes, hill);
   const a = new CharacterController(), b = new CharacterController();
   a.teleport(0, 1, -4); b.teleport(0, 1, -4);
@@ -485,7 +488,7 @@ function assertSane(cc, label) {
   let ha = 2166136261, hb = 2166136261, mx = 0, mz = 0, sprint = false, path = 0, onGround = 0, onBox = 0, events = 0;
   const px = a.position.clone();
   for (let i = 0; i < 1200; i++) {
-    if (i % 60 === 0) { const ang = rnd() * 2 * Math.PI; mx = Math.cos(ang); mz = Math.sin(ang) * rnd(); sprint = rnd() < 0.4; }
+    if (i % 60 === 0) { const ux = rnd() * 2 - 1, uz = rnd() * 2 - 1, l = Math.sqrt(ux * ux + uz * uz) || 1; mx = ux / l; mz = (uz / l) * rnd(); sprint = rnd() < 0.4; }
     if (a.position.x * a.position.x + a.position.z * a.position.z > 64) { mx = -a.position.x * 0.2; mz = -a.position.z * 0.2; } // come back
     const jump = rnd() < 0.005;
     a.step(DT, mx, mz, jump, sprint, world);
@@ -496,9 +499,10 @@ function assertSane(cc, label) {
     if (a.blocked || a.steppedUp || a.landedThisStep) events++;
   }
   check('determinism: position hashes equal (10 s)', ha === hb ? 1 : 0, 1, 1);
-  // golden value: an intended behaviour change updates it (the scene's hill uses Math.sin: V8's is the same everywhere)
-  const GOLDEN = 0xb611647c;
-  check('determinism: golden hash (b611647c)', ha === GOLDEN ? 1 : 0, 1, 1);
+  // golden value: an intended behaviour change updates it; the scene uses only + - * / sqrt floor so it is the same
+  // on every platform (pinned on macOS arm64, checked by the Linux x64 CI runner)
+  const GOLDEN = 0x2889c427;
+  check(`determinism: golden hash (${GOLDEN.toString(16)}; got ${(ha >>> 0).toString(16)})`, ha === GOLDEN ? 1 : 0, 1, 1);
   check('determinism: the run moved (path length)', path, 5, 100, 'm');
   console.log(`determinism run: ${onGround} steps on the heightfield, ${onBox} on boxes, ${events} wall / step / landing events`);
   assertSane(a, 'determinism');
