@@ -538,10 +538,12 @@ function substepIter(B, J, iters) {
   check('connected(): dropped on remove and on break', afterRemove && afterBreak);
   const lookups = (n) => { let hits = 0; for (let i = 0; i < n; i++) if (J.connected(i & 7, (i >> 3) & 7)) hits++; return hits; };
   lookups(1e6); // warm-up (a top-level loop would run unoptimised and box)
-  const a0 = v8.getHeapStatistics().total_allocated_bytes;
+  const exactLookup = v8.getHeapStatistics().total_allocated_bytes !== undefined; // Node >= 26 (NaN elsewhere)
+  const a0 = exactLookup ? v8.getHeapStatistics().total_allocated_bytes : 0;
   lookups(1e6);
   // one boxed double per lookup would be 16 B; V8's counter shows ~0.1-0.3 B per lookup of background noise
-  check('connected(): bytes counted per lookup (V8 noise only)', (v8.getHeapStatistics().total_allocated_bytes - a0) / 1e6, 0, 2, 'B');
+  if (exactLookup) check('connected(): bytes counted per lookup (V8 noise only)', (v8.getHeapStatistics().total_allocated_bytes - a0) / 1e6, 0, 2, 'B');
+  else console.log('NOTE  connected(): per-lookup allocation counter unavailable on this Node (needs total_allocated_bytes)');
   void j2;
 }
 {
