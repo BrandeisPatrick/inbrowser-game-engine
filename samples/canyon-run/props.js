@@ -13,7 +13,9 @@ const { smoothstep } = Noise;
 
 export const PROP_FADE = { start: 250, end: 290 };   // near rocks / cacti -> impostors
 const SHRUB_FADE = { start: 115, end: 150 };
-const KIND_ROCK = 1, KIND_THIN = 3;
+const KIND_ROCK = 1;
+/** Collider kind of thin posts (cactus trunks, gate pillars, lamp poles): ChaseRig `thinKinds: [3]` in main.js. */
+export const KIND_THIN = 3;
 
 // ------------------------------------------------------------------ geometry
 const srgb = new THREE.Color();

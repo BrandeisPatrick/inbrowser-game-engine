@@ -27,6 +27,10 @@
 // Lamp lights: the 8 nearest visible lamps are real PointLights (NearestLights pool, ENGINE.md Conventions); opt-in
 // `lights: { clustered: true }` makes every lamp within clusteredRange of the camera a render/ClusteredLights light
 // instead (world.clustered; the world updates it per frame from atmo.camera; call world.setSize on resize).
+// Water refraction (opt-in, `water: { refraction: true | {...} }`, 0.8.0): the bay and pond materials see the scene
+// behind their surface through a mid-frame render/SceneCopy.js (world.sceneCopy, half resolution) attached to the bay
+// and pond meshes; it needs a single-sampled scene target (PostFX gbuffer: true or aa: 'fxaa', see Water.js);
+// world.setSize forwards the drawing-buffer size, world.setWaterRefraction(on) switches it at runtime.
 // Coordinates: world = bake frame - world.offset (the spawn point is the origin).
 import * as THREE from 'three';
 import { Atmosphere, TIME_PRESETS } from '../render/Atmosphere.js';
@@ -42,7 +46,8 @@ import { Terrain, GroundSurface, drapePolygon } from './Terrain.js';
 import { loadMapData, prepareMapData, generateProceduralCity, assetBase } from './MapData.js';
 import { mulberry32, signedArea, sanitizeRing, pointInRing, ringBounds, hashStr, clamp, lerp, RingIndex } from './geom.js';
 import { Traffic } from './Traffic.js';
-import { createWaterMaterial, makeWaterNormalMap } from './Water.js';
+import { createWaterMaterial, makeWaterNormalMap, setWaterRefraction as setMaterialRefraction, setWaterSceneTextures, updateWaterRefraction } from './Water.js';
+import { SceneCopy } from '../render/SceneCopy.js';
 import { Waterfront, createGroundMaterial } from './Shore.js';
 import { replaceWithChunks, localizeMeshOrigin } from './MeshChunker.js';
 
@@ -150,6 +155,12 @@ export class MapWorld {
    *        clustered.update(atmo.camera) at the end of update() and forwards setSize(). Clustered mode needs
    *        `world.atmo.camera` (world.system({ camera }) sets it after load, or `atmosphere: { camera }`): without
    *        it the lamps do not light (warned once at night). setLightMode('pool' | 'clustered') switches at runtime.
+   * @param {object} [o.water]  { refraction: false | true | { strength, absorption, murk, foamDepth, maxDepth } }
+   *        (Water.js WATER_REFRACTION_DEFAULTS). Refraction creates world.sceneCopy (render/SceneCopy.js, scale 0.5),
+   *        attaches it to the bay mesh and the ponds (drawn after the opaque city from then on: renderOrder 1) and
+   *        gives both water materials its textures; it needs a single-sampled scene target (PostFX gbuffer: true or
+   *        aa: 'fxaa'; on the MSAA path the copy is skipped, warned once, and the water stays opaque).
+   *        setWaterRefraction(on) switches it at runtime (creating the copy on first use).
    */
   constructor(o = {}) {
     this.scene = o.scene;
@@ -183,6 +194,9 @@ export class MapWorld {
     this.streamer = null;
     this.clustered = null;   // render/ClusteredLights.js instance (o.lights.clustered), null = PointLight pool
     this._CL = null; this._clusterOn = false; this._clusterNoCam = false;
+    /** @type {SceneCopy|null} render/SceneCopy.js instance once water refraction was on (o.water.refraction) */
+    this.sceneCopy = null;
+    this._refraction = false; this._ponds = null; this._pondOrder = 0; this._dbSize = null;
   }
 
   // ================================================================== load
@@ -369,13 +383,61 @@ export class MapWorld {
   }
 
   /**
-   * Render size for size-dependent world helpers (the clustered light grid: world.clustered.setSize in drawing-buffer
-   * pixels, floor(css * pixelRatio) as PostFX). Call it from the resize handler, e.g.
-   * engine.onResize = (w, h, pr) => { postfx.setSize(w, h, pr); world.setSize(w, h, pr); }. No-op without world.clustered.
+   * Render size for size-dependent world helpers (the clustered light grid: world.clustered.setSize, and the water
+   * refraction's scene copy: world.sceneCopy.setSize, both in drawing-buffer pixels, floor(css * pixelRatio) as
+   * PostFX). Call it from the resize handler, e.g.
+   * engine.onResize = (w, h, pr) => { postfx.setSize(w, h, pr); world.setSize(w, h, pr); }. No-op without either.
    */
   setSize(width, height, pixelRatio = 1) {
-    if (this.clustered) this.clustered.setSize(Math.max(1, Math.floor(width * pixelRatio)), Math.max(1, Math.floor(height * pixelRatio)));
+    const W = Math.max(1, Math.floor(width * pixelRatio)), H = Math.max(1, Math.floor(height * pixelRatio));
+    this._dbSize = [W, H]; // for a scene copy created later (setWaterRefraction)
+    if (this.clustered) this.clustered.setSize(W, H);
+    if (this.sceneCopy) this.sceneCopy.setSize(W, H);
   }
+
+  /**
+   * Water refraction at runtime (A/B; `water.refraction` at construction): toggles the WATER_REFRACTION define of
+   * the bay and pond materials (each compiles its other program once), attaches / detaches world.sceneCopy (created
+   * on first use: SceneCopy(renderer, { scale: 0.5 }) sized like the last setSize, else the renderer's drawing
+   * buffer) to the bay and pond meshes, and draws the ponds after the opaque city while it is on (renderOrder 1).
+   * Off detaches the copy: no copy, no extra pass (the copy and its target, i.e. its GPU memory, are kept for the
+   * next on). Returns the state in effect (false before the materials exist).
+   * @param {boolean} on
+   * @returns {boolean}
+   */
+  setWaterRefraction(on) {
+    if (!this.mat || !this.mat.water) return false;
+    on = !!on;
+    setMaterialRefraction(this.mat.water, on);
+    setMaterialRefraction(this.mat.pond, on);
+    const meshes = [];
+    const bay = this.waterfront && this.waterfront.water ? this.waterfront.water.mesh : null;
+    if (bay) meshes.push(bay);
+    if (this._ponds) meshes.push(this._ponds);
+    if (on) {
+      if (!this.sceneCopy) {
+        const sz = this._dbSize;
+        const copy = this.sceneCopy = new SceneCopy(this.renderer, sz ? { scale: 0.5, width: sz[0], height: sz[1] } : { scale: 0.5 });
+        for (const m of [this.mat.water, this.mat.pond]) setWaterSceneTextures(m, copy.color, copy.depth, copy);
+        if (this._ponds) { // per-draw refraction uniforms (the bay's Water mesh sets its own), chained: any hook stays
+          const pm = this.mat.pond, prev = this._ponds.onBeforeRender;
+          this._ponds.onBeforeRender = function (renderer, scene, cam, geometry, material, group) {
+            updateWaterRefraction(pm, renderer, cam);
+            prev.call(this, renderer, scene, cam, geometry, material, group);
+          };
+        }
+      }
+      for (const m of meshes) this.sceneCopy.attach(m);
+      if (this._ponds && !this._refraction) { this._pondOrder = this._ponds.renderOrder; this._ponds.renderOrder = 1; }
+    } else if (this.sceneCopy) { // target kept
+      for (const m of meshes) this.sceneCopy.detach(m);
+      if (this._ponds && this._refraction) this._ponds.renderOrder = this._pondOrder;
+    }
+    this._refraction = on;
+    return on;
+  }
+  /** Whether water refraction is on (see setWaterRefraction). */
+  get waterRefraction() { return this._refraction; }
 
   /** Traffic options normalised from o.traffic (number = count, false = none, object = options). */
   _trafficOpts() {
@@ -421,8 +483,9 @@ export class MapWorld {
     // rock by slope + land class) on the islands and hills - see Shore.js createGroundMaterial
     const ground = createGroundMaterial(T.ground, this.renderer);
     // open water + ponds: Water.js (shore field / noise uniforms are filled in by the Waterfront)
-    const water = createWaterMaterial({ normalMap: T.water, noiseMap: null });
-    const pond = createWaterMaterial({ normalMap: T.water, noiseMap: null, pond: true });
+    const refraction = (this.opts.water && this.opts.water.refraction) || false; // see setWaterRefraction
+    const water = createWaterMaterial({ normalMap: T.water, noiseMap: null, refraction });
+    const pond = createWaterMaterial({ normalMap: T.water, noiseMap: null, pond: true, refraction });
     const G = (T.pbr && T.pbr.ground) || {};
     const fac = createFacadeMaterials(T.facade, T.pbr);
     this.mat = {
@@ -576,6 +639,8 @@ diffuseColor.rgb *= (0.85 + 0.3 * texture2D(map, vMapUv * 0.071 + 0.13).g) * mix
       drapePolygon(S, r, (w.hl || []).map((h) => sanitizeRing(h)).filter(Boolean), 0.07, sink(W, white));
     }
     const wm = W.build(this.mat.pond); if (wm) { wm.name = 'ponds'; this.group.add(wm); }
+    this._ponds = wm || null;
+    if (this.opts.water && this.opts.water.refraction) this.setWaterRefraction(true);
   }
 
   _buildFlatAreas() {

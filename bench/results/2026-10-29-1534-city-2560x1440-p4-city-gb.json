@@ -1,0 +1,369 @@
+{
+  "page": "city",
+  "label": "p4-city-gb",
+  "date": "2026-10-29T19:34:42.893Z",
+  "url": "http://localhost:5190/city/?bench=1&size=2560x1440&notraffic&nostream=1&gbuffer=1",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 16218,
+  "reloads": 0,
+  "poses": [
+    "shore",
+    "street",
+    "high"
+  ],
+  "settings": [
+    {
+      "label": "gbuffer+taa (ref)",
+      "set": {}
+    },
+    {
+      "label": "ssr",
+      "set": {
+        "postfx.ssr": true
+      }
+    },
+    {
+      "label": "volumetric",
+      "set": {
+        "postfx.volumetric": true
+      }
+    },
+    {
+      "label": "dof",
+      "set": {
+        "postfx.dof": true
+      }
+    },
+    {
+      "label": "motionBlur 1",
+      "set": {
+        "postfx.motionBlur": 1
+      }
+    },
+    {
+      "label": "ao.normals gbuffer",
+      "set": {
+        "postfx.ao.normals": "gbuffer"
+      }
+    },
+    {
+      "label": "all on",
+      "set": {
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.dof": true,
+        "postfx.motionBlur": 1,
+        "postfx.ao.normals": "gbuffer"
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "shore",
+      "ms": 7.112,
+      "fps": 140.6,
+      "hash": "39ca72d1",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 92,
+      "triangles": 616773
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "street",
+      "ms": 9.125,
+      "fps": 109.59,
+      "hash": "8eac684d",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 145,
+      "triangles": 908961
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "high",
+      "ms": 9.238,
+      "fps": 108.25,
+      "hash": "69051889",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 144,
+      "triangles": 903961
+    },
+    {
+      "setting": "ssr",
+      "pose": "shore",
+      "ms": 7.962,
+      "fps": 125.59,
+      "hash": "2b524bb2",
+      "meanAbs": 1.3245,
+      "p99": 23.979,
+      "max": 70.604,
+      "pctOver2": 11.617,
+      "pctOver8": 6.008,
+      "drawCalls": 93,
+      "triangles": 616774
+    },
+    {
+      "setting": "ssr",
+      "pose": "street",
+      "ms": 9.483,
+      "fps": 105.45,
+      "hash": "d11409b2",
+      "meanAbs": 0.078,
+      "p99": 2.521,
+      "max": 18.104,
+      "pctOver2": 1.347,
+      "pctOver8": 0.032,
+      "drawCalls": 146,
+      "triangles": 908962
+    },
+    {
+      "setting": "ssr",
+      "pose": "high",
+      "ms": 9.683,
+      "fps": 103.27,
+      "hash": "af3a6d05",
+      "meanAbs": 0.409,
+      "p99": 9.104,
+      "max": 42.979,
+      "pctOver2": 5.73,
+      "pctOver8": 1.365,
+      "drawCalls": 145,
+      "triangles": 903962
+    },
+    {
+      "setting": "volumetric",
+      "pose": "shore",
+      "ms": 7.763,
+      "fps": 128.82,
+      "hash": "7e333278",
+      "meanAbs": 0.2644,
+      "p99": 1.021,
+      "max": 1.583,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 93,
+      "triangles": 616774
+    },
+    {
+      "setting": "volumetric",
+      "pose": "street",
+      "ms": 9.333,
+      "fps": 107.14,
+      "hash": "a3176384",
+      "meanAbs": 0.0012,
+      "p99": 0.021,
+      "max": 0.396,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 146,
+      "triangles": 908962
+    },
+    {
+      "setting": "volumetric",
+      "pose": "high",
+      "ms": 9.521,
+      "fps": 105.03,
+      "hash": "69051889",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 145,
+      "triangles": 903962
+    },
+    {
+      "setting": "dof",
+      "pose": "shore",
+      "ms": 8.813,
+      "fps": 113.48,
+      "hash": "48e1e865",
+      "meanAbs": 2.0988,
+      "p99": 20.333,
+      "max": 61.542,
+      "pctOver2": 25.839,
+      "pctOver8": 6.908,
+      "drawCalls": 98,
+      "triangles": 616779
+    },
+    {
+      "setting": "dof",
+      "pose": "street",
+      "ms": 10.804,
+      "fps": 92.56,
+      "hash": "0e7aa6dd",
+      "meanAbs": 2.2905,
+      "p99": 20.729,
+      "max": 67.917,
+      "pctOver2": 25.23,
+      "pctOver8": 9.186,
+      "drawCalls": 151,
+      "triangles": 908967
+    },
+    {
+      "setting": "dof",
+      "pose": "high",
+      "ms": 10.896,
+      "fps": 91.78,
+      "hash": "903e92f4",
+      "meanAbs": 2.9787,
+      "p99": 22.521,
+      "max": 60.042,
+      "pctOver2": 36.662,
+      "pctOver8": 11.641,
+      "drawCalls": 150,
+      "triangles": 903967
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "shore",
+      "ms": 8.396,
+      "fps": 119.11,
+      "hash": "39ca72d1",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 97,
+      "triangles": 616778
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "street",
+      "ms": 10.4,
+      "fps": 96.15,
+      "hash": "8eac684d",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 150,
+      "triangles": 908966
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "high",
+      "ms": 10.483,
+      "fps": 95.39,
+      "hash": "69051889",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 149,
+      "triangles": 903966
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "shore",
+      "ms": 7.171,
+      "fps": 139.45,
+      "hash": "54109930",
+      "meanAbs": 0.3997,
+      "p99": 14.979,
+      "max": 62.354,
+      "pctOver2": 3.23,
+      "pctOver8": 1.767,
+      "drawCalls": 92,
+      "triangles": 616773
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "street",
+      "ms": 9.146,
+      "fps": 109.34,
+      "hash": "701081ba",
+      "meanAbs": 1.2057,
+      "p99": 23.667,
+      "max": 43.417,
+      "pctOver2": 11.892,
+      "pctOver8": 4.834,
+      "drawCalls": 145,
+      "triangles": 908961
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "high",
+      "ms": 9.237,
+      "fps": 108.25,
+      "hash": "0d04f37b",
+      "meanAbs": 0.1831,
+      "p99": 4.146,
+      "max": 32.5,
+      "pctOver2": 1.77,
+      "pctOver8": 0.618,
+      "drawCalls": 144,
+      "triangles": 903961
+    },
+    {
+      "setting": "all on",
+      "pose": "shore",
+      "ms": 11.683,
+      "fps": 85.59,
+      "hash": "b06848af",
+      "meanAbs": 3.4656,
+      "p99": 28.521,
+      "max": 63.771,
+      "pctOver2": 32.815,
+      "pctOver8": 13.498,
+      "drawCalls": 105,
+      "triangles": 616786
+    },
+    {
+      "setting": "all on",
+      "pose": "street",
+      "ms": 12.858,
+      "fps": 77.77,
+      "hash": "9bac4577",
+      "meanAbs": 3.3682,
+      "p99": 25.813,
+      "max": 65.667,
+      "pctOver2": 35.413,
+      "pctOver8": 14.101,
+      "drawCalls": 158,
+      "triangles": 908974
+    },
+    {
+      "setting": "all on",
+      "pose": "high",
+      "ms": 13.238,
+      "fps": 75.54,
+      "hash": "d776ca3d",
+      "meanAbs": 3.3232,
+      "p99": 23.125,
+      "max": 60.042,
+      "pctOver2": 40.091,
+      "pctOver8": 13.808,
+      "drawCalls": 157,
+      "triangles": 903974
+    }
+  ]
+}

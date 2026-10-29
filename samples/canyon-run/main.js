@@ -3,11 +3,21 @@
 // (terrain heightfield + rock / gate box colliders) + VehicleController (BUGGY_SPEC) + Atmosphere (desert sun
 // model, keys 1-8) + PostFX (?nofx=1 to disable) + ChaseRig / OrbitRig / FreeFlyRig + VehicleInput (custom
 // action map with always-on debug keys, gamepad, touch) + AudioBus synth voices + the UI kit HUD.
+// Opt-in (0.8.0; the default page renders and works exactly as without them):
+//   ?lamps=1          trackside lamp field (lamps.js): ~120 poles with one ClusteredLights point light each (the
+//                     engine's clustered forward lights), lit by the darkness (try ?lamps=1&t=night)
+//   ?gpuparticles=1   dust devils on the GpuParticleSystem (effects.js; CPU fallback with a warning). Chosen at load:
+//                     not switchable at runtime (no harness setting)
+//   ?devilscollide=1  with ?gpuparticles=1: the devils collide with PostFX's scene depth
+//   ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1[&focus=&fstop=], ?lut=warm|bleach|identity, ?aonormals=gbuffer   post-stack
+//                     passes of 0.8.0 (samples/shared/fx-flags.js; ssr / motionblur / aonormals need ?gbuffer=1)
+// Other knobs: ?nofx=1, ?gbuffer=1, ?aa=, ?cascades=, ?shadows=, ?msaamax=, ?t=, ?laps=, ?fps=, ?profile=, ?bench=1&size=WxH.
 import * as THREE from 'three';
 import {
   Engine, PhysicsWorld, Atmosphere, DEFAULT_LOOKS, PostFX, DEFAULT_GRADE, ChaseRig, OrbitRig, FreeFlyRig,
   VehicleInput, PAD_BUTTONS as B, PAD_AXES as AX, inputRamp, LoadingScreen, makeTextureArray, createTimeUniforms,
-  updateTimeUniforms, ChunkCuller, createBenchHarness, readBenchParams,
+  updateTimeUniforms, ChunkCuller, createBenchHarness, readBenchParams, ClusteredLights, installClusteredChunks, syncClustered,
+  setMaterialClustered,
 } from '@vibe/engine';
 import { Track, TRACK_HALF_WIDTH } from './track.js';
 import { Terrain, createTerrainMaterial, WORLD_HALF } from './terrain.js';
@@ -15,12 +25,16 @@ import { Course } from './course.js';
 import { Props } from './props.js';
 import { Buggy, SURFACES } from './buggy.js';
 import { DustDevils } from './effects.js';
+import { LampField } from './lamps.js';
 import { Race, formatTime } from './race.js';
 import { HUD, ACCENT, applyTheme } from './hud.js';
 import { BuggyAudio } from './audio.js';
+import { readFxFlags, aoFlags, loadLut, fxSettings } from '../shared/fx-flags.js';
 
 const params = new URLSearchParams(location.search);
-const NOFX = params.has('nofx') && params.get('nofx') !== '0';
+const flag = (k) => params.has(k) && params.get(k) !== '0';
+const NOFX = flag('nofx');
+const LAMPS = flag('lamps'), GPU_PARTICLES = flag('gpuparticles'), DEVILS_COLLIDE = GPU_PARTICLES && flag('devilscollide');
 const LAPS = Math.max(1, Math.min(5, +(params.get('laps') || 1) | 0));
 // drawing-buffer pixels above which the post stack uses FXAA instead of 4x MSAA (Retina density hides the difference;
 // the 4x resolve costs 2.7 ms at 3024x1964): ?msaamax=N, ?msaamax= (empty) = always MSAA by day, ?msaamax=0 = always FXAA
@@ -68,6 +82,12 @@ const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // yield to the lo
 
 async function boot() {
   const t0 = performance.now();
+  // ?lamps=1: the clustered-light chunk patch goes in before any material compiles (inert without the define)
+  let clustered = null;
+  if (LAMPS) {
+    if (!installClusteredChunks()) console.warn('[canyon-run] clustered lights unavailable (three light chunks changed): the lamps glow but light nothing');
+    clustered = new ClusteredLights({ maxLights: 1024, zFar: 420 });
+  }
   applyTheme();
   const loading = new LoadingScreen({ title: 'CANYON RUN', label: 'Surveying the canyon…', accent: ACCENT, background: '#140c07' });
   const physics = new PhysicsWorld({ cellSize: 32 });
@@ -123,10 +143,15 @@ async function boot() {
       await nextFrame();
       W.props = new Props({ scene, renderer, terrain, track, physics, arrays, U });
       mark('props');
+      if (LAMPS) { // after the props: the poles keep clear of their colliders
+        W.lamps = new LampField({ scene, terrain, track, physics, clustered });
+        W.lamps.update(atmo.darkness);
+        mark('lamps');
+      }
       progress(0.88, 'Fuelling the buggy…');
       await nextFrame();
       W.buggy = new Buggy({ scene, physics, terrain, atmosphere: atmo });
-      W.devils = new DustDevils({ scene, terrain, track, atmosphere: atmo });
+      W.devils = new DustDevils({ scene, renderer, terrain, track, atmosphere: atmo, gpu: GPU_PARTICLES, collide: DEVILS_COLLIDE });
       W.culler = new ChunkCuller({ maxDistance: 2400, budget: 32 });
       for (const m of terrain.chunks) W.culler.add(m);
       W.culler.add(W.course.gantry, { maxDistance: 1600 });
@@ -136,6 +161,7 @@ async function boot() {
   }, 'world-load');
   await engine.load((p, label) => loading.setProgress(p, label));
   const { track, terrain, course, props, buggy, devils, culler } = W;
+  const lamps = W.lamps || null;
 
   // ---------------------------------------------------------------- post-processing
   let postfx = null;
@@ -143,7 +169,9 @@ async function boot() {
     try {
       const { width, height } = engine.size;
       // 0.7.0 knobs: ?gbuffer=1 (MRT scene pass: normals + velocity, TAA), ?aa=auto|msaa|fxaa|taa, ?cascades=2|3|4
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, grade: DESERT_GRADE, ao: { radius: 1.6, thickness: 1.4, samples: 8 }, msaaMaxPixels: MSAA_MAX, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto' });
+      // 0.8.0 knobs (samples/shared/fx-flags.js): ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1, ?lut=<name>, ?aonormals=gbuffer
+      const fx = readFxFlags(params), lut = await loadLut(params);
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, grade: DESERT_GRADE, ao: { radius: 1.6, thickness: 1.4, samples: 8, ...aoFlags(params) }, msaaMaxPixels: MSAA_MAX, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto', ...fx, lut });
       buggy.object3d.traverse((o) => { if (o.isMesh) postfx.track(o); }); // the car moves: per-object velocity (replayed whenever the G-buffer is built)
     } catch (e) { console.warn('[canyon-run] post-processing unavailable', e); atmo.setFogMode('scene'); }
   }
@@ -151,7 +179,24 @@ async function boot() {
     if (postfx) postfx.render(dt);
     else { renderer.render(sc, cam); atmo.renderFlare(renderer, cam); }
   };
-  engine.onResize = (w, h, pr) => { if (postfx) postfx.setSize(w, h, pr); };
+  // clustered tiles map gl_FragCoord of the scene target: the drawing-buffer size, floor(css * pixelRatio) like PostFX
+  const clusterSize = (w, h, pr) => { if (clustered) clustered.setSize(Math.floor(w * pr), Math.floor(h * pr)); };
+  engine.onResize = (w, h, pr) => { if (postfx) postfx.setSize(w, h, pr); clusterSize(w, h, pr); };
+  if (clustered) {
+    const sz = engine.size;
+    clusterSize(sz.width, sz.height, engine.pixelRatio);
+    syncClustered(scene, true); // ENGINE_CLUSTERED on every lit material now in the scene, and on anything added later
+    // the lenses glow on their own: unclustered, or their lamp 0.3 m below them blows out every lens underside (~1300
+    // lx) into a bloom halo. Material-level, after the sync (the 'childadded' listener never re-applies it)
+    if (lamps) setMaterialClustered(lamps.bulbMaterial, false);
+  }
+  // ?devilscollide=1: PostFX itself as the depth source, set once (its sceneDepth is read on every update, so a G-buffer
+  // rebuild is followed). Calling setDepth per frame would clear the system's fresh-snapshot flag, so every update()
+  // would re-snapshot the camera's current matrices instead of those of the render that produced the depth
+  if (devils.gpu && devils.ps.depthCollision) {
+    if (postfx) devils.ps.setDepth(postfx, camera);
+    else console.warn('[canyon-run] ?devilscollide needs the post stack (scene depth): no collision with ?nofx');
+  }
 
   // ---------------------------------------------------------------- game objects
   const race = new Race({ track, laps: LAPS });
@@ -271,7 +316,8 @@ async function boot() {
       atmo.update(cp, dt);
       props.update(cp, dt);
       culler.update(camera);
-      devils.update(dt, buggy.object3d.position.x, buggy.object3d.position.z, race.near.i);
+      devils.update(dt, buggy.object3d.position.x, buggy.object3d.position.z, race.near.i, camera);
+      if (lamps) { lamps.update(atmo.darkness); clustered.update(camera); } // rows only when the darkness moved; clusters every frame
     },
   }, 'world');
   engine.addSystem({ lateUpdate: (dt) => hud.update(dt, buggy) }, 'hud');
@@ -292,28 +338,65 @@ async function boot() {
   renderer.compile(scene, camera);
   W.timings.compile = Math.round(performance.now() - tc);
   const loadMs = Math.round(performance.now() - t0);
-  window.__canyon = { timings: W.timings, THREE, engine, physics, atmo, postfx, U, track, terrain, course, props, buggy, devils, race, hud, audio, input, rigs, culler, startRun, toMenu, resetToCheckpoint, loadMs };
+  window.__canyon = { timings: W.timings, THREE, engine, physics, atmo, postfx, U, track, terrain, course, props, buggy, devils, race, hud, audio, input, rigs, culler, startRun, toMenu, resetToCheckpoint, loadMs, lamps, clustered };
   console.info(`[canyon-run] ready in ${loadMs} ms · track ${(track.length / 1000).toFixed(2)} km, ${track.checkpoints.length} gates, terrain ${terrain.ms.toFixed(0)} ms, props`, props.stats, `textures ${W.arrays.loaded}/${W.arrays.wanted}`, W.timings);
+  if (lamps) console.info(`[canyon-run] lamps: ${lamps.stats.count} of ${lamps.stats.slots} slots, ${lamps.stats.colliders} colliders, clustered (max ${clustered.maxLights}, zFar ${clustered.zFar} m)`, lamps.stats.skipped);
+  if (GPU_PARTICLES) console.info(`[canyon-run] dust devils on the ${devils.gpu ? 'GPU' : 'CPU (fallback)'} particle system${devils.gpu && devils.ps.depthCollision ? ', depth collision' : ''}`);
   // measurement harness (window.__sample; `?bench=1&size=WxH` pins the drawing buffer): fixed poses relative to the
   // buggy, with every time-dependent input pinned so captures reproduce across page loads (ENGINE.md "Measurement
   // protocol"): clouds are wall-clock driven, wind sway and dither fades read the time uniforms.
+  // 0.8.0 poses: 'night-lamps' (meaningful with ?lamps=1&t=night; without the flag just the track) and 'devils' (one dust
+  // devil stepped 180 x 1/60 s from a fixed spot and seed in after(), on whichever particle system the page runs).
+  // Harness order (core/Bench.js pose()): pose fn, camera.updateMatrixWorld(), after(), quiet(), 2 frames: quiet runs
+  // AFTER after(), so quiet keeps the devil a 'devils' pose just stepped (`posed`) and clears the devils for the others.
   const _f = new THREE.Vector3(), _bp = () => buggy.object3d.position, _bf = () => _f.set(0, 0, -1).applyQuaternion(buggy.object3d.quaternion);
+  const _near = { i: 0, s: 0, lateral: 0, dist: 0, along: 0 };
+  const buggyIndex = () => { const p = _bp(); return track.nearest(p.x, p.z, -1, _near).i; }; // global search: no live hint
+  const DEVIL_POSE = { ahead: 70, side: 18, steps: 180, cam: 48 }; // track points (2 m) ahead of the buggy, m right of travel
+  let posed = ''; // id of the pose being applied (after / quiet read it)
+  const POSES = {
+    straight: (cam) => { const p = _bp(), f = _bf(); cam.position.set(p.x - f.x * 30, p.y + 1.6, p.z - f.z * 30); cam.up.set(0, 1, 0); cam.lookAt(p.x + f.x * 120, p.y + 1, p.z + f.z * 120); },
+    chase: (cam) => { const p = _bp(); cam.position.set(p.x, p.y + 4, p.z + 14); cam.up.set(0, 1, 0); cam.lookAt(p.x, p.y + 1, p.z); },
+    aerial: (cam) => { const p = _bp(); cam.position.set(p.x, p.y + 120, p.z + 60); cam.up.set(0, 1, 0); cam.lookAt(p.x, p.y, p.z - 200); },
+    ahead: (cam) => { const p = _bp(), f = _bf(); cam.position.set(p.x + f.x * 60, p.y + 1.6, p.z + f.z * 60); cam.up.set(0, 1, 0); cam.lookAt(p.x + f.x * 300, p.y + 1, p.z + f.z * 300); },
+    // behind the buggy (heading-relative), higher and further back than chase, down the track: ~7 lamp heads in view
+    // before the canyon bends behind a wall ~200 m out (more lamps' light spheres reach the view's clusters)
+    'night-lamps': (cam) => {
+      const p = _bp(), f = _bf(), l = Math.hypot(f.x, f.z) || 1, fx = f.x / l, fz = f.z / l;
+      cam.position.set(p.x - fx * 24, p.y + 6, p.z - fz * 24); cam.up.set(0, 1, 0); cam.lookAt(p.x + fx * 110, p.y + 1, p.z + fz * 110);
+    },
+    // from the track centre 96 m ahead of the buggy towards the devil's spot 140 m ahead, 18 m right of travel, aimed
+    // where the wind carries it in the 3 s the pose steps it (~46 m away, the funnel ~1/3 of the frame height)
+    devils: (cam) => {
+      const n = track.n, i0 = buggyIndex(), j = (i0 + DEVIL_POSE.ahead) % n, k = (i0 + DEVIL_POSE.cam) % n, sd = DEVIL_POSE.side;
+      const dx = track.x[j] - track.tz[j] * sd, dz = track.z[j] + track.tx[j] * sd, cx = track.x[k], cz = track.z[k];
+      cam.position.set(cx, terrain.heightAt(cx, cz) + 3.5, cz); cam.up.set(0, 1, 0);
+      cam.lookAt(dx + devils.wind.x * 3, terrain.heightAt(dx, dz) + 8, dz + devils.wind.z * 3);
+    },
+  };
+  const poses = {};
+  for (const id in POSES) poses[id] = (cam, h) => { posed = id; POSES[id](cam, h); };
   const sample = createBenchHarness(engine, {
     name: 'canyon-run',
-    poses: {
-      straight: (cam) => { const p = _bp(), f = _bf(); cam.position.set(p.x - f.x * 30, p.y + 1.6, p.z - f.z * 30); cam.up.set(0, 1, 0); cam.lookAt(p.x + f.x * 120, p.y + 1, p.z + f.z * 120); },
-      chase: (cam) => { const p = _bp(); cam.position.set(p.x, p.y + 4, p.z + 14); cam.up.set(0, 1, 0); cam.lookAt(p.x, p.y + 1, p.z); },
-      aerial: (cam) => { const p = _bp(); cam.position.set(p.x, p.y + 120, p.z + 60); cam.up.set(0, 1, 0); cam.lookAt(p.x, p.y, p.z - 200); },
-      ahead: (cam) => { const p = _bp(), f = _bf(); cam.position.set(p.x + f.x * 60, p.y + 1.6, p.z + f.z * 60); cam.up.set(0, 1, 0); cam.lookAt(p.x + f.x * 300, p.y + 1, p.z + f.z * 300); },
-    },
+    poses,
     after: (cam) => {
       culler.update(cam); props.update(cam.position, 0.016); atmo.update(cam.position, 0);
       const su = atmo.sky.material.uniforms; su.uTime.value = 0; su.uCloudOffset.value.set(0.13, 0.41);
       U.uTime.value = 0; U.uViewPos.value.copy(cam.position);
+      if (lamps) { lamps.update(atmo.darkness, true); clustered.update(cam); } // rows from the pinned darkness, clusters for this view
+      if (posed === 'devils') {
+        // depth collision reads the last rendered scene depth: render this view first (TAA jitter restarted), so the
+        // steps collide with this pose's depth, not the previous pose's
+        // (live particles cleared first: none drawn in that frame, so no jittered draw-time camera snapshot either)
+        if (devils.gpu && devils.ps.depthCollision && postfx) { devils.reset(); if (postfx.history) postfx.history.reset(); engine.renderFn(scene, cam, 0); }
+        devils.poseDevil((buggyIndex() + DEVIL_POSE.ahead) % track.n, DEVIL_POSE.side, DEVIL_POSE.steps, cam);
+      }
     },
     quiet: () => {
       for (const k in rigs) rigs[k].deactivate();
-      devils.ps.clear(); devils.timer = 1e9; for (const d of devils.devils) d.on = false; buggy.dust.clear();
+      if (posed === 'devils') devils.timer = 1e9; // keep the devil after() just stepped, no live spawns
+      else { devils.ps.clear(); devils.timer = 1e9; for (const d of devils.devils) d.on = false; }
+      buggy.dust.clear();
       if (postfx) { postfx.autoExposure = false; postfx.setTimeOfDay(atmo.darkness); }
       if (postfx && postfx.history) { postfx.history.reset(); for (let i = 0; i < 32; i++) postfx.render(0); } // TAA: converge from a clean history
     },
@@ -323,8 +406,21 @@ async function boot() {
       'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
       'postfx.ao': { get: () => !!(postfx && postfx.aoPass.enabled), set: (v) => { if (postfx) postfx.aoPass.enabled = !!v; } },
       'postfx.bloom': { get: () => !!(postfx && postfx.bloomPass.enabled), set: (v) => { if (postfx) postfx.bloomPass.enabled = !!v; } },
+      ...fxSettings(() => postfx), // 0.8.0: postfx.ssr / volumetric / motionBlur / dof / lut.strength / ao.normals (+ their options)
       'shadows.kernel': { get: () => atmo.shadowKernel, set: (v) => atmo.setShadowKernel(v) },
-      'time': { get: () => atmo.timeOfDay, set: (v) => { atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(atmo.darkness); } },
+      'time': {
+        get: () => atmo.timeOfDay,
+        set: (v) => {
+          atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(atmo.darkness);
+          if (lamps) { lamps.update(atmo.darkness, true); clustered.update(camera); } // lamp rows + lens glow follow at once
+        },
+      },
+      // ?lamps=1: light rows + lens glow on (darkness-driven) / off (intensity 0, out of every cluster): no recompile.
+      // The devils' particle system (?gpuparticles=1) is chosen at load and has no setting.
+      'lamps.enabled': {
+        get: () => !!(lamps && lamps.enabled),
+        set: (v) => { if (lamps) { lamps.setEnabled(!!v); lamps.update(atmo.darkness, true); clustered.update(camera); } },
+      },
     },
   });
   const bp = readBenchParams(location.search); if (bp.size) sample.resize(bp.size.w, bp.size.h);

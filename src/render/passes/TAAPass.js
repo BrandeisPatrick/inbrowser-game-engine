@@ -44,12 +44,18 @@
 //     car in the chase view) one fetch replaces the 5 Catmull-Rom taps, which there are that texel (meanAbs <= 0.0027).
 //     A static benchmark pose is all such pixels, so it shows the most this saves; a moving view saves little.
 //   All three together: meanAbs <= 0.0027 (with 'single' <= 0.0053).
-// API: render(renderer, writeBuffer, readBuffer), setSize(w, h), reset(), texture, dispose(); taaFilterWeights(jx, jy).
+// SSR (0.8.0, PostFX sets `ssr` to its SSRPass, or null): with an enabled SSR pass the define TAA_SSR composites the
+// reflection buffer (premultiplied: engineSsrComposite(c, ssr) = c * (1 - ssr.a) + ssr.rgb) into the current frame
+// before the resolve: one tSSR fetch at the pixel, applied to the centre and to every neighbourhood tap before the
+// YCoCg conversion, so the variance clip box contains the reflection (clipped toward a neighbourhood without it, a
+// history with reflections would flicker), and to the fresh-frame output. Without it the shader text is 0.7.0's.
+// API: render(renderer, writeBuffer, readBuffer), setSize(w, h), reset(), texture, ssr, dispose(); taaFilterWeights(jx, jy).
 // Perspective cameras and a standard depth buffer (not reversedDepthBuffer / logarithmicDepthBuffer): the depth
 // reprojection and disocclusion test linearise depth with near / far. Output is NaN / Inf-safe (black).
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GBUFFER_GLSL_DECODE } from '../GBuffer.js';
+import { SSR_COMPOSITE_GLSL } from './SSRPass.js';
 
 export const TAA_CLAMPS = ['variance', 'minmax'];
 export const TAA_FILTERS = ['catmull-rom', 'bilinear'];
@@ -71,7 +77,8 @@ export function taaFilterWeights(jx, jy, out = new Float32Array(9)) {
   return out;
 }
 
-const TAAShader = {
+/** @internal The TAA shader sources (test/postfx-options.mjs pins the fragment text without its TAA_SSR blocks). */
+export const TAA_SHADER = {
   vertexShader: /* glsl */`
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
@@ -99,6 +106,10 @@ const TAAShader = {
     float linearDepth( float d ) { return uNear * uFar / ( uFar - ( uFar - uNear ) * d ); } // standard (not reversed) depth
     // a NaN / Inf from the scene would stay in the history for good: black instead (comparisons with NaN fail)
     vec3 finite( vec3 o ) { return all( lessThan( abs( o ), vec3( 65000.0 ) ) ) ? max( o, 0.0 ) : vec3( 0.0 ); }
+    #ifdef TAA_SSR
+    uniform sampler2D tSSR;
+    ${SSR_COMPOSITE_GLSL}
+    #endif
 
     vec3 historyAt( vec2 uv ) {
     #ifdef TAA_SNAP
@@ -124,6 +135,11 @@ const TAAShader = {
 
     #define TAA_CLOSEST( X, Y ) { ivec2 q = clamp( ip + ivec2( X, Y ), ivec2( 0 ), mx ); float e = texelFetch( tDepth, q, 0 ).x; if ( e < d ) { d = e; bp = q; } }
     #define TAA_TAP( X, Y, I ) { vec3 c = tm( texelFetch( tColor, clamp( ip + ivec2( X, Y ), ivec2( 0 ), mx ), 0 ).rgb ); cur += c * uWeights[ I ]; m1 += c; m2 += c * c; lo = min( lo, c ); hi = max( hi, c ); }
+    #ifdef TAA_SSR
+    // every tap with this pixel's reflection composited (ssrC, fetched once in main)
+    #undef TAA_TAP
+    #define TAA_TAP( X, Y, I ) { vec3 c = tm( engineSsrComposite( texelFetch( tColor, clamp( ip + ivec2( X, Y ), ivec2( 0 ), mx ), 0 ).rgb, ssrC ) ); cur += c * uWeights[ I ]; m1 += c; m2 += c * c; lo = min( lo, c ); hi = max( hi, c ); }
+    #endif
 
     void main() {
       ivec2 ip = ivec2( gl_FragCoord.xy ), mx = ivec2( uRes ) - 1;
@@ -131,6 +147,10 @@ const TAAShader = {
       ivec2 bp = ip;
       TAA_CLOSEST( - 1, - 1 ) TAA_CLOSEST( 1, - 1 ) TAA_CLOSEST( - 1, 1 ) TAA_CLOSEST( 1, 1 )
       float z = linearDepth( d );
+    #ifdef TAA_SSR
+      vec4 ssrC = texture2D( tSSR, vUv );
+      if ( uFresh > 0.5 ) { gl_FragColor = vec4( finite( engineSsrComposite( texelFetch( tColor, ip, 0 ).rgb, ssrC ) ), z ); return; }
+    #endif
       if ( uFresh > 0.5 ) { gl_FragColor = vec4( finite( texelFetch( tColor, ip, 0 ).rgb ), z ); return; }
 
       // current frame at the unjittered pixel centre + neighbourhood moments (tonemapped YCoCg)
@@ -228,6 +248,9 @@ export class TAAPass extends Pass {
     this._reject = check(o.reject ?? 'quad', TAA_REJECTS, 'reject');
     this._velocityFirst = !!(o.velocityFirst ?? false);
     this._snap = !!(o.snap ?? false);
+    /** @type {{ enabled: boolean, texture: THREE.Texture } | null} SSR pass to composite before the resolve (PostFX sets it). */
+    this.ssr = null;
+    this._ssrOn = false; // TAA_SSR defined
     this._w = 1; this._h = 1;
     this._rt = [null, null];
     this._makeTargets();
@@ -240,6 +263,7 @@ export class TAAPass extends Pass {
       defines: {},
       uniforms: {
         tColor: { value: null }, tDepth: { value: null }, tVelocity: { value: null }, tNormal: { value: null }, tHistory: { value: null },
+        tSSR: { value: null }, // TAA_SSR only
         uReproj: hu.uReproj, uJitter: hu.uJitter, // CameraHistory's own uniform objects
         uInvVPw: { value: new THREE.Vector4() },
         uWeights: { value: new Float32Array(9) },
@@ -247,8 +271,8 @@ export class TAAPass extends Pass {
         uNear: { value: 0.1 }, uFar: { value: 1000 },
         uRes: { value: new THREE.Vector2(1, 1) },
       },
-      vertexShader: TAAShader.vertexShader,
-      fragmentShader: TAAShader.fragmentShader,
+      vertexShader: TAA_SHADER.vertexShader,
+      fragmentShader: TAA_SHADER.fragmentShader,
       blending: THREE.NoBlending, depthTest: false, depthWrite: false,
     });
     this._syncDefines();
@@ -298,7 +322,8 @@ export class TAAPass extends Pass {
 
   render(renderer, writeBuffer, readBuffer) {
     const u = this.material.uniforms, h = this.history, gb = this.gbuffer, cam = this.camera;
-    const f = h.uniforms.uFrame.value;
+    const f = h.uniforms.uFrame.value, s = this.ssr, ssrOn = s !== null && s.enabled;
+    if (ssrOn !== this._ssrOn) { this._ssrOn = ssrOn; this._syncDefines(); }
     const fresh = this._reset || h.fresh || f !== this._lastFrame + 1; // a skipped frame leaves a stale history
     this._reset = false;
     this._lastFrame = f;
@@ -307,6 +332,7 @@ export class TAAPass extends Pass {
     u.tVelocity.value = gb.velocity;
     u.tNormal.value = gb.normal;
     u.tHistory.value = this._rt[this._cur].texture;
+    u.tSSR.value = ssrOn ? s.texture : null;
     this._cur ^= 1;
     u.uFresh.value = fresh ? 1 : 0;
     u.uBlend.value = this.blend;
@@ -345,6 +371,7 @@ export class TAAPass extends Pass {
       TAA_REJECT_SINGLE: this._reject === 'single',
       TAA_VELOCITY_FIRST: this._velocityFirst,
       TAA_SNAP: this._snap,
+      TAA_SSR: this._ssrOn,
     };
     let changed = false;
     for (const k in want) {

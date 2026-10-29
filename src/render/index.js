@@ -6,7 +6,15 @@ export { PostFX, DEFAULT_GRADE, gradeAt, resolveAA, AA_MODES } from './PostFX.js
 export { GBuffer, GBUFFER_UNIFORMS, GBUFFER_DEFINES, GBUFFER_VERTEX_TAIL, GBUFFER_CHUNK_TAILS, GBUFFER_GLSL_DECODE, installGBufferChunks, createGBufferTarget, updateGBufferView } from './GBuffer.js';
 export { TAAPass, taaFilterWeights, TAA_CLAMPS, TAA_FILTERS, TAA_HISTORY_FORMATS } from './passes/TAAPass.js';
 export { CameraHistory, jitterPattern } from './CameraHistory.js';
-export { AOPass } from './passes/AOPass.js';
+export { AOPass, AO_NORMALS } from './passes/AOPass.js';
+// screen-space / volumetric / lens passes (0.8.0), composed by PostFX ({ ssr, volumetric, motionBlur, dof, lut })
+export { SSRPass, SSR_DEFAULTS, SSR_SOURCES, SSR_COMPOSITE_GLSL } from './passes/SSRPass.js';
+export { VolumetricPass, VOLUMETRIC_DEFAULTS } from './passes/VolumetricPass.js';
+export { MotionBlurPass, MOTION_BLUR_DEFAULTS } from './passes/MotionBlurPass.js';
+export { DoFPass, DOF_DEFAULTS, circleOfConfusion, vogelDisc } from './passes/DoFPass.js';
+export { LUT_GLSL, LUT_DEFAULT_SIZE, identityLut, lutFromFunction, lutLookup, disposeLut } from './Lut.js';
+// the opaque scene (colour + depth) copied mid-frame before a mesh draws, for refractive materials (world Water)
+export { SceneCopy } from './SceneCopy.js';
 export { BloomPass } from './passes/BloomPass.js';
 export { ExposurePass } from './passes/ExposurePass.js';
 export { installCascadeShadowChunk, cascadeShadowChunkText, installedCascades, MAX_CASCADES } from './shadowCascade.js';

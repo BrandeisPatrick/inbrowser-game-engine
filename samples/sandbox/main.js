@@ -17,6 +17,7 @@
 // crates are not colliders for the vehicle controller, only the kinematic box pushes them), ?worker=1,
 // ?debug=1, ?substeps=N (4), ?hz=N, ?seed=N, ?t=<preset|hours>, ?nofx=1, ?fps=60, ?profile=N, ?gbuffer=1 (MRT scene
 // pass + per-instance velocity for the body pools), ?aa=auto|msaa|fxaa|taa, ?cascades=2|3|4, ?shadows=fast|pcf|pcss,
+// 0.8.0: ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1[&focus=&fstop=], ?lut=warm|bleach, ?aonormals=gbuffer (samples/shared/fx-flags.js),
 // ?bench=1&size=WxH (window.__sample: poses overview / close of the current scene; settings physics.debug,
 // postfx.aa, postfx.gbuffer and, in-thread, physics.substeps). window.__sandbox = { engine, dyn, physics, scene (the current one), pools, dbg, spawn, reset, ... }.
 // Invariant: every scene build (first load, R, a bench pose) ends with present(): the instance pools, the scene's
@@ -38,6 +39,7 @@ import { LoadingScreen } from '@vibe/engine/ui';
 import { SCENES, SCENE_HZ, BodyPools, buildStatics } from './scenes.js';
 import { PROXY_LAYER } from './car.js';
 import { HUD, ACCENT, applyTheme } from './hud.js';
+import { readFxFlags, aoFlags, loadLut, fxSettings } from '../shared/fx-flags.js';
 
 const params = new URLSearchParams(location.search);
 const flag = (k) => params.has(k) && params.get(k) !== '0';
@@ -279,7 +281,9 @@ async function boot() {
   if (!NOFX) {
     try {
       const { width, height } = engine.size;
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8 }, msaaMaxPixels: MSAA_MAX, gbuffer: GBUFFER, aa: params.get('aa') || 'auto' });
+      // 0.8.0 knobs (samples/shared/fx-flags.js): ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1, ?lut=<name>, ?aonormals=gbuffer
+      const fx = readFxFlags(params), lut = await loadLut(params);
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8, ...aoFlags(params) }, msaaMaxPixels: MSAA_MAX, gbuffer: GBUFFER, aa: params.get('aa') || 'auto', ...fx, lut });
       // bodies move: per-instance velocity from the pools (InstancedPool({ velocity }) when ?gbuffer=1), replayed whenever the G-buffer is built
       for (const b of pools.buckets) postfx.trackPool(b.pool);
       pools.onBucket = (pool) => postfx.trackPool(pool);
@@ -328,6 +332,7 @@ async function boot() {
     'physics.debug': { get: () => !!dbg.enabled, set: (v) => setDebug(v) },
     'postfx.aa': { get: () => (postfx ? postfx.aa : null), set: (v) => { if (postfx) postfx.set('aa', v); } },
     'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
+    ...fxSettings(() => postfx), // 0.8.0: postfx.ssr / volumetric / motionBlur / dof / lut.strength / ao.normals (+ their options)
   };
   // substeps are a field of the in-thread world; a worker's world got them at construction (no knob then)
   if (dyn.world) settings['physics.substeps'] = { get: () => dyn.world.substeps, set: (v) => { dyn.world.substeps = Math.max(1, Math.min(64, v | 0)); } };

@@ -1,0 +1,203 @@
+{
+  "page": "city",
+  "label": "p4-water",
+  "date": "2026-10-29T19:34:12.882Z",
+  "url": "http://localhost:5190/city/?bench=1&size=2560x1440&notraffic&nostream=1&water=refraction&gbuffer=1&aa=fxaa",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 5281,
+  "reloads": 0,
+  "poses": [
+    "shore",
+    "street"
+  ],
+  "settings": [
+    {
+      "label": "refraction off (ref)",
+      "set": {
+        "water.refraction": false
+      }
+    },
+    {
+      "label": "refraction on",
+      "set": {
+        "water.refraction": true
+      }
+    },
+    {
+      "label": "copy scale 0.25",
+      "set": {
+        "water.refraction": true,
+        "water.copyScale": 0.25
+      }
+    },
+    {
+      "label": "copy scale 1",
+      "set": {
+        "water.refraction": true,
+        "water.copyScale": 1
+      }
+    },
+    {
+      "label": "copy no clear",
+      "set": {
+        "water.refraction": true,
+        "water.copyClear": false
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "refraction off (ref)",
+      "pose": "shore",
+      "ms": 5.821,
+      "fps": 171.8,
+      "hash": "71148793",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 91,
+      "triangles": 616772
+    },
+    {
+      "setting": "refraction off (ref)",
+      "pose": "street",
+      "ms": 7.521,
+      "fps": 132.96,
+      "hash": "9db1242f",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 144,
+      "triangles": 908960
+    },
+    {
+      "setting": "refraction on",
+      "pose": "shore",
+      "ms": 6.288,
+      "fps": 159.05,
+      "hash": "d6af6f79",
+      "meanAbs": 0.0464,
+      "p99": 1.5,
+      "max": 10.396,
+      "pctOver2": 0.76,
+      "pctOver8": 0.023,
+      "drawCalls": 92,
+      "triangles": 616773
+    },
+    {
+      "setting": "refraction on",
+      "pose": "street",
+      "ms": 7.892,
+      "fps": 126.72,
+      "hash": "9db1242f",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 145,
+      "triangles": 908961
+    },
+    {
+      "setting": "copy scale 0.25",
+      "pose": "shore",
+      "ms": 6.212,
+      "fps": 160.97,
+      "hash": "975efb92",
+      "meanAbs": 0.0477,
+      "p99": 1.542,
+      "max": 14.25,
+      "pctOver2": 0.778,
+      "pctOver8": 0.028,
+      "drawCalls": 92,
+      "triangles": 616773
+    },
+    {
+      "setting": "copy scale 0.25",
+      "pose": "street",
+      "ms": 7.792,
+      "fps": 128.34,
+      "hash": "38621a83",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0.125,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 145,
+      "triangles": 908961
+    },
+    {
+      "setting": "copy scale 1",
+      "pose": "shore",
+      "ms": 6.646,
+      "fps": 150.47,
+      "hash": "413c9050",
+      "meanAbs": 0.0469,
+      "p99": 1.521,
+      "max": 10.438,
+      "pctOver2": 0.769,
+      "pctOver8": 0.024,
+      "drawCalls": 92,
+      "triangles": 616773
+    },
+    {
+      "setting": "copy scale 1",
+      "pose": "street",
+      "ms": 8.167,
+      "fps": 122.45,
+      "hash": "9db1242f",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 145,
+      "triangles": 908961
+    },
+    {
+      "setting": "copy no clear",
+      "pose": "shore",
+      "ms": 6.313,
+      "fps": 158.42,
+      "hash": "d6af6f79",
+      "meanAbs": 0.0464,
+      "p99": 1.5,
+      "max": 10.396,
+      "pctOver2": 0.76,
+      "pctOver8": 0.023,
+      "drawCalls": 92,
+      "triangles": 616773
+    },
+    {
+      "setting": "copy no clear",
+      "pose": "street",
+      "ms": 7.879,
+      "fps": 126.92,
+      "hash": "9db1242f",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 145,
+      "triangles": 908961
+    }
+  ]
+}

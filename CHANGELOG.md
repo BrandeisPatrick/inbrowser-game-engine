@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.8.0 — 2026-10-29
+Screen-space and volumetric rendering (phase 4 of the 1.0 roadmap, ENGINE.md "Render pipeline (0.8.0)"): reflections,
+volumetric sun light, water refraction, motion blur, depth of field and 3D-LUT grading, composed by `PostFX` in the
+order Scene -> Exposure -> AO -> SSR -> Volumetric -> TAA -> MotionBlur -> DoF -> Bloom -> Final. Every option is off
+by default and the default output is byte-identical to 0.7.0 (shader texts pinned by sha1 with the new blocks under
+absent defines; `npm run smoke` hashes every default pose equal to the 0.7.0 gate).
+- Render: `PostFX({ ssr, volumetric, motionBlur, dof, lut, ao: { normals } })`, `postfx.set(path, value)` /
+  `postfx.get(path)` for every knob (`'ssr'`, `'ssr.<opt>'`, `'volumetric'`, `'volumetric.<opt>'`, `'motionBlur'`,
+  `'dof'`, `'lut'`, `'lut.strength'`, `'ao.normals'`, ...), passes created / removed / disposed at runtime,
+  `colorSource` = the last enabled of TAA -> MotionBlur -> DoF; FinalPass hooks `FINAL_SSR` / `FINAL_VOLUMETRIC` /
+  `FINAL_LUT`, TAA hook `TAA_SSR` (the reflection composited into every 3x3 tap so the variance clip keeps it).
+- Render: `SSRPass` — half-resolution screen-space reflections on the G-buffer normal / roughness (perspective-correct
+  march, bisection, premultiplied output `col * (1 - a) + rgb`); the specular share of metals is a capped heuristic
+  until an F0 nibble lands in the G-buffer (0.9.0), no roughness blur yet, `jitter` off by default (the TAA hook
+  cannot converge a jittered march). Canyon Run at 3024x1964: +0.5 ms (0.33-0.37 at 2560x1440), the city's shore
+  +1.6 ms (the bay mirrors the warehouse: 1.44 mean change); `steps` / `scale` move it by < 0.1 ms.
+- Render: `AOPass({ normals: 'gbuffer' })` — GTAO on the G-buffer normal instead of depth-reconstructed normals.
+- Render: `VolumetricPass` — quarter-resolution shadowed sun in-scatter through the final pass's own haze + mist
+  layers (Henyey-Greenstein, closed-form optical depth, cascade shadow taps on compare-mode or packed maps, the
+  cascade walk of `shadowCascade.js`), temporally accumulated with a 2x2 depth-aware disocclusion; output per unit sun
+  irradiance, composited as `sunColor * sun.intensity * intensity * r` after the fog (the analytic sun glow is dropped
+  while it is on). Physical units: faint in thin desert air and inside a shadowed canyon; `density` / `intensity` are
+  the look knobs. +0.4-0.8 ms at 3024x1964 (scale 0.5: +1.1-1.9), +0.3-0.5 at 2560x1440.
+- Render: `MotionBlurPass` (McGuire tile-max reconstruction on the G-buffer velocity, camera reprojection elsewhere,
+  exact pass-through when static, `shutter` for frame-rate-independent streaks) and `DoFPass` (signed thin-lens CoC,
+  half-resolution far / near gathers, exact pass-through in focus, `circleOfConfusion()`); `Lut.js` (`LUT_GLSL`,
+  `identityLut`, `lutFromFunction`, `lutLookup`) with the Assets `lut` value applied in the final pass. Motion blur
+  costs 2.0-2.1 ms at 3024x1964 (1.3 at 2560x1440) even on a static frame (the velocity / tile passes are
+  bandwidth), DoF 2.6 ms (1.7; `scale` 1 +6.2), the LUT 0 ms; `ao.normals: 'gbuffer'` < 0.1 ms.
+- Render: `SceneCopy` — the opaque scene's colour + depth copied mid-frame from a mesh's `onBeforeRender` (one copy
+  per frame, target / viewport restored), for refractive materials; needs a single-sampled scene target.
+- World: `createWaterMaterial({ refraction })`, `MapWorld({ water: { refraction } })`, `world.setWaterRefraction`: the
+  bay sees the scene behind its surface (slope-driven distortion, Beer-Lambert absorption, murk, depth foam);
+  refraction off is byte-identical (shader hashes pinned); world-build pins untouched. +0.6-0.7 ms at 3024x1964
+  (+0.4-0.5 at 2560x1440), the mid-frame target switch, paid whenever the bay draws.
+- Samples: `?ssr=1 ?volumetric=1 ?motionblur=<s> ?dof=1[&focus=&fstop=] ?lut=warm|bleach|identity ?aonormals=gbuffer`
+  on every sample (`samples/shared/fx-flags.js`, harness settings `postfx.<path>`); Canyon Run `?lamps=1` (118
+  trackside lamps on `ClusteredLights`, +0.3-0.5 ms at night at 3024x1964, pose `night-lamps`, setting
+  `lamps.enabled`), `?gpuparticles=1[&devilscollide=1]`
+  (dust devils on `GpuParticleSystem`, seeded, pose `devils`); city `?water=refraction` + pose `shore`; procedural
+  `.cube` LUTs under `samples/public/luts`; `npm run smoke` adds `canyon-night` and `city-water`.
+- Tests: `ssr-ao`, `volumetric` (130), `blur-dof-lut` (128), `water` (117), `postfx-options` 141 -> 264; `npm test`
+  runs 25 suites.
+
 ## 0.7.0 — 2026-10-29
 Render foundations (phase 3 of the 1.0 roadmap, ENGINE.md "Render pipeline (0.7.0)"): a G-buffer path with TAA,
 clustered lighting for hundreds of lights, 2-4 shadow cascades with a PCSS kernel, and GPU particles. Every knob is

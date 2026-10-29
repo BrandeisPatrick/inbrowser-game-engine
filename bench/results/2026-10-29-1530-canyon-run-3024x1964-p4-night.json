@@ -1,0 +1,127 @@
+{
+  "page": "canyon-run",
+  "label": "p4-night",
+  "date": "2026-10-29T19:30:10.801Z",
+  "url": "http://localhost:5190/canyon-run/?bench=1&size=3024x1964&lamps=1&t=night",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 2546,
+  "reloads": 0,
+  "poses": [
+    "night-lamps",
+    "chase",
+    "straight"
+  ],
+  "settings": [
+    {
+      "label": "lamps off (ref)",
+      "set": {
+        "lamps.enabled": false
+      }
+    },
+    {
+      "label": "lamps on",
+      "set": {
+        "lamps.enabled": true
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "lamps off (ref)",
+      "pose": "night-lamps",
+      "ms": 8.013,
+      "fps": 124.8,
+      "hash": "2b43b7b0",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 58,
+      "triangles": 678948
+    },
+    {
+      "setting": "lamps off (ref)",
+      "pose": "chase",
+      "ms": 8.717,
+      "fps": 114.72,
+      "hash": "17b3b3e9",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 62,
+      "triangles": 810020
+    },
+    {
+      "setting": "lamps off (ref)",
+      "pose": "straight",
+      "ms": 8.346,
+      "fps": 119.82,
+      "hash": "22dbabb2",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 58,
+      "triangles": 678948
+    },
+    {
+      "setting": "lamps on",
+      "pose": "night-lamps",
+      "ms": 8.283,
+      "fps": 120.72,
+      "hash": "c7295bb4",
+      "meanAbs": 24.545,
+      "p99": 137.708,
+      "max": 227.708,
+      "pctOver2": 52.636,
+      "pctOver8": 41.486,
+      "drawCalls": 58,
+      "triangles": 678948
+    },
+    {
+      "setting": "lamps on",
+      "pose": "chase",
+      "ms": 9.138,
+      "fps": 109.44,
+      "hash": "e6c18988",
+      "meanAbs": 18.0697,
+      "p99": 91.417,
+      "max": 127.521,
+      "pctOver2": 52.794,
+      "pctOver8": 42.657,
+      "drawCalls": 62,
+      "triangles": 810020
+    },
+    {
+      "setting": "lamps on",
+      "pose": "straight",
+      "ms": 8.846,
+      "fps": 113.05,
+      "hash": "108ff32d",
+      "meanAbs": 28.6327,
+      "p99": 121.833,
+      "max": 238.729,
+      "pctOver2": 68.693,
+      "pctOver8": 59.049,
+      "drawCalls": 58,
+      "triangles": 678948
+    }
+  ]
+}
