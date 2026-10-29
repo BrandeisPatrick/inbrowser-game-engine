@@ -22,6 +22,9 @@ import { BuggyAudio } from './audio.js';
 const params = new URLSearchParams(location.search);
 const NOFX = params.has('nofx') && params.get('nofx') !== '0';
 const LAPS = Math.max(1, Math.min(5, +(params.get('laps') || 1) | 0));
+// drawing-buffer pixels above which the post stack uses FXAA instead of 4x MSAA (Retina density hides the difference;
+// the 4x resolve costs 2.7 ms at 3024x1964): ?msaamax=N, ?msaamax= (empty) = always MSAA by day, ?msaamax=0 = always FXAA
+const MSAA_MAX = params.has('msaamax') ? (params.get('msaamax') === '' ? Infinity : +params.get('msaamax') || 0) : 4e6;
 
 // ------------------------------------------------------------------ desert sky: high sun, long days, clear dry air
 const DESERT_SUN = { rise: 6.05, set: 19.45, maxElevation: 74, nightDepth: 35, nightRate: 13, azimuthStart: 70, azimuthSpan: 220 };
@@ -71,6 +74,7 @@ async function boot() {
   const engine = new Engine({
     container: document.getElementById('app'), fixedHz: 120, maxSubsteps: 4, renderer: { antialias: NOFX }, far: 7000, fov: 60,
     physics, profile: params.get('profile') ? +params.get('profile') : false,
+    targetFps: +params.get('fps') || 0, // ?fps=60: cap the tick rate (every 2nd frame on a 120 Hz screen: battery, heat)
   });
   const { scene, camera, renderer } = engine;
   const U = createTimeUniforms();
@@ -78,7 +82,8 @@ async function boot() {
   const atmo = new Atmosphere({
     scene, renderer, camera, sun: DESERT_SUN, looks: DESERT_LOOKS, timePresets: DESERT_PRESETS,
     timeOfDay: t == null ? 'noon' : Number.isFinite(+t) ? +t : t,
-    shadows: { cascades: 2, near: 42, far: [250, 420, 650] }, maxCasterHeight: 170, cloudWind: [9, 3],
+    // ?shadows=pcf: three's 17-tap kernel; 'fast' (5 hardware-compare taps) measured -2 ms at 3024x1964, pixel-equivalent
+    shadows: { cascades: 2, near: 42, far: [250, 420, 650], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 170, cloudWind: [9, 3],
   });
 
   // ---------------------------------------------------------------- world build (one loading system)
@@ -137,7 +142,7 @@ async function boot() {
   if (!NOFX) {
     try {
       const { width, height } = engine.size;
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, grade: DESERT_GRADE, ao: { radius: 1.6, thickness: 1.4, samples: 8 } });
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, grade: DESERT_GRADE, ao: { radius: 1.6, thickness: 1.4, samples: 8 }, msaaMaxPixels: MSAA_MAX });
     } catch (e) { console.warn('[canyon-run] post-processing unavailable', e); atmo.setFogMode('scene'); }
   }
   engine.renderFn = (sc, cam, dt) => {

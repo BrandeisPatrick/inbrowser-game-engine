@@ -497,3 +497,89 @@ that ramp-foot zone is street, not deck (rasterised as road, in `segHash`, ribbo
 street's, no `deckHash` entry, no slab), and the climb starts at the carriageway edge with the grade it needs.
 `node dev/ramp-foot-probe.mjs` lists deck samples 0.4-3.2 m over a ground carriageway: 51 before (nine zones now,
 four pieces lie on the ground entirely), 0 after; drive-sim sunk-wheel steps 438 -> 0, everything else unchanged.
+
+
+## Optimisation pass (2026-10-27): measured
+**Method.** Canyon Run in the desktop app's Chromium (ANGLE over Metal, Apple M4), `Profiler.benchThroughput` (CPU
+submission + GPU execution per frame, GPU-synchronised) with the viewport emulated at 2560x1440, fixed camera poses,
+particles cleared; the world layer headless in Node (the procedural city, `test/world-build.mjs`) with `--cpu-prof`;
+every "same output" change checked by content hash (textures) or sampled world positions (meshes, <= 0.06 mm).
+
+**Where a frame goes** (Canyon Run, driving view along the canyon, 2560x1440, MSAA 4x, GTAO, bloom; 10.6 ms):
+
+| part | ms | how measured |
+|---|---|---|
+| terrain splat shading (sample shader: 10 array fetches, biplanar rock) | ~4.0 | plain MeshStandardMaterial on the chunks: 6.6 |
+| terrain shadow sampling (2 cascades, PCF) | 1.4 | `receiveShadow` off on the chunks: 9.2 |
+| MSAA 4x (R11G11B10 target + resolve) | 1.9 | `setMSAA(0)` (FXAA): 8.6 |
+| GTAO (half res, 8 samples, bilateral blur) | 1.55 | AO pass off: 9.0 |
+| shadow map rendering (near 2048 every frame, far 4096 every other) | 0.9 | `shadowMap.autoUpdate = false`: 9.6 |
+| bloom / sky / far ring / props / impostors / ribbon / gates / buggy / decals | 0.4 / 0.25 / <= 0.05 each | hidden one at a time |
+| CPU of the whole tick at 1024x768 | ~1.0 (render 0.8, HUD 0.1, the rest < 0.1 each) | `?profile=` |
+
+At 1024x768 the sample runs 60 fps with ~1 ms of CPU and ~3 ms GPU-synchronised: on this machine the CPU side of the
+engine is not where frame time goes; what remains is per-pixel work (the sample's terrain shader, the post stack) and
+content (a dust devil in view costs 1-10 ms of alpha-blended fill at 2560x1440).
+
+**Draw order and overdraw.** three.js sorts opaque objects front to back by *object position*; every merged static
+mesh (chunk tiles, building shells, the sample's terrain chunks) sat at the world origin, so they all sorted equal and
+drew in creation order. `chunkMesh` tiles and the city's building shells now sit at their XZ centre with local vertices
+(`localizeMeshOrigin`; world positions unchanged). Measured on the M4: no difference in any pose (within 0.1 ms, same
+page, chunks moved back and forth), and a depth pre-pass of the terrain made every pose slower (+1.3 to +3 ms): Apple's
+tile-based deferred renderer already shades each opaque pixel once, so order only matters on immediate-mode GPUs
+(desktop NVIDIA / AMD / Intel), where the change is kept for.
+
+**Impostor bake** (`render/Impostors.js`, 80 views of 4 Canyon Run models, 128 px cells): 273-302 ms per fresh page load,
+of which the CPU box filter of the 2x supersampled cells took 56-154 ms and the dilate + mip post 53-90 ms, the GPU
+render + readback 29 ms. The filter now runs on the GPU (alpha-weighted K x K `texelFetch`, one quarter-size readback per
+row) and the atlas is only as tall as its cells need (640 px -> a 1024-row texture instead of 2048): 137-148 ms cold,
+64 ms warm; atlas texels within +-1 of the CPU result. Phase times are printed with the bake line.
+
+**Headless world layer.** `Atmosphere` without a renderer skips PMREM / sky cube / horizon sampling / flare, so
+`MapWorld({ renderer: null })` builds in Node (it threw before). The procedural city (1775 buildings, 41 roads, 7927
+colliders, 250 vehicles) builds in ~1.5 s: buildings 265 ms, props 260 (vegetation atlas 126), roads 204, traffic 140,
+ground + water 154, procedural canvas textures ~330 (noise-bound: asphalt 80, ground 65, cloud atlas 83, water normals
+30), static tiling 41; `world.update` at the spawn 0.24 ms per frame with the traffic in-thread (0.16 ms per sim step
+for 250 vehicles), `getGroundHeight` 0.2 us. The build is deterministic (same stats, same traffic summary and poses
+across runs), which `test/world-build.mjs` pins. Next load-time lever, not taken here: the procedural textures off the
+main thread (OffscreenCanvas worker) or cached, ~300 ms of every load.
+
+**Kept only what measured.** Painter / mip-chain / tiling micro-changes: ~10 % on the procedural painters,
+hash-identical output. Tried and dropped: a per-cell corner cache for `pnoise` (12 ns per call either way), an
+octave-major cloud fBm (same time), the depth pre-pass, and chunk sort order on Apple GPUs (above).
+
+## MacBook pass (2026-10-28): Retina, Apple GPUs, ProMotion
+**Method.** As the optimisation pass above, with the viewport emulated at a 14-inch MacBook Pro's pixel count
+(3024x1964, 5.9 Mpx, pixel ratio 1), fixed camera poses, particles cleared, auto-exposure frozen; every quality-affecting
+change A/B'd by reading the framebuffer back at full resolution (mean / max absolute RGB difference and the share of
+pixels changed by more than 2 and 8 of 255). The coding was done by subagents on disjoint files; every number here was
+measured in the browser afterwards. Baseline (Canyon Run, driving view): 15.8 ms with 0.3 ms of CPU: terrain 7.7
+(sample splat shader ~5, shadow sampling 1.5), GTAO 2.7, MSAA 4x 2.7 (4x -> 2x saves only 0.4: the cost is the
+resolve), final pass ~1.6, shadow maps 1.0, bloom 0.5.
+
+| change | ms at 3024x1964 (driving / chase view) | pixel change vs before | default |
+|---|---|---|---|
+| `PostFX.lateClear`: scene target cleared by three's autoClear after the shadow maps instead of by RenderPass before them (ANGLE/Metal opened a render pass just for the clear and stored + reloaded all 4 samples) | -1.0 / -1.3 | none (identical) | on |
+| AO buffers capped at 0.6 Mpx (`ao.maxPixels`; 961x624 here instead of 1512x982) + depth-aware upsample in the final pass (`ao.upsample: 'depth'`) + RG16F buffers (`ao.compact`) | -1.3 / -1.7 (0.8 Mpx: -1.0 / -1.3; 0.45 Mpx: -1.5 / -2.0) | mean 0.036-0.042, < 0.5 % of pixels > 2, ~0.03 % > 8 | on |
+| `'fast'` shadow kernel: 5 hardware-compare (bilinear) taps on a DepthTexture attached to the same shadow render, instead of three's 17 unpacked taps; the same penumbra width | -1.9 / -2.1 | mean 0.008-0.015, < 0.2 % > 2, 0.003 % > 16 | opt-in (`shadows.kernel`); Canyon Run on |
+| FXAA instead of 4x MSAA above `msaaMaxPixels` drawing-buffer pixels | -2.8 / -3.2 (city street view -3.2) | mean 0.5-1.4, 5-17 % of pixels > 2 (edges, facades) | opt-in; Canyon Run 4e6 |
+| all of the above | 15.8 -> 9.9 / 17.1 -> 10.1; aerial 12.6 | as above | |
+| `Engine.targetFps` tick pacing + `refreshRate` | not a frame-time change: 60 on a 120 Hz display runs every second callback (half the GPU/CPU work per second, for battery and heat); verified 28.4 ticks/s with `?fps=30` on a 60 Hz pane | - | 0 (uncapped) |
+| procedural texture-array layers in a worker pool (`proceduralTextures.worker.js`) | main-thread cost per layer 24-68 ms -> 3-5 ms (Canyon Run's three layers: 102-195 ms -> 23-26 ms on the main thread; end-to-end load unchanged there, since little overlaps and a fresh worker's cold JIT runs a layer ~2x slower; the city's 15-layer facade array: 15 ms main-thread, 228 ms off-thread while the main thread builds roads) | none (byte-identical, hash-checked) | on in browsers |
+| city street / crossing view (`/city`, procedural city, 147 draw calls, quiet machine): engine defaults (late clear + AO cap), then `'fast'` shadows, then the FXAA rule | 15.7 -> 12.6 -> 12.0 -> 8.9; 16.2 -> 12.7 -> 12.2 -> 9.1 | as above | |
+| Canyon Run terrain shader (sample): fetches skipped where their weight is provably 0 (steep walls: rockW exactly 1, no dirt fetches; floor: no rock fetches), biplanar gradients hoisted out of the branch (fixes wrong mips along the wall foot) | -0.9 / -1.1 (aerial) | 1 LSB in 54-92 of 5.5 M pixels | on (sample) |
+| terrain detail uniforms: biplanar projections under a 0.02 weight skipped (faded over 0.02-0.04), dirt normal / second sample faded 40-120 m, rock normals and 2-projection rock 300-600 m | -0.8 / -0.4 / -2.7 (aerial) | mean <= 0.03, max 18 on 0.004 % of pixels | on (sample; `uDetail`, `uDetailRock`) |
+| everything, same page, all knobs off -> on (driving / chase / aerial) | 15.9 -> 8.2, 17.1 -> 8.7, 20.6 -> 8.8 | | |
+
+**What the Retina frame cannot shed.** The MSAA resolve (`blitFramebuffer` of colour + depth from the multisampled
+target into the texture / DepthTexture that the AO, fog and flare passes read) has no cheaper path in WebGL2:
+multisampled textures cannot be sampled, a multisampled depth blit must be same-size and NEAREST, `copyTexSubImage2D`
+cannot copy depth, `WEBGL_multisampled_render_to_texture` is not implemented in Chromium, and `resolveDepthBuffer:
+false` would leave the DepthTexture unwritten. The remaining per-pixel costs are the sample's terrain splat shader
+and MSAA itself, which is why FXAA above a pixel budget is the one visible-quality knob offered.
+
+**ProMotion.** Uncapped, the engine keeps the 60 fps frame budget of the adaptive-resolution controller, so a 120 Hz
+display runs at full resolution and 60 fps as before; `targetFps: 120` makes the controller chase 120 fps at a lower
+pixel ratio, `targetFps: 60` halves the work per second on a 120 Hz display. The F3 overlay shows ticks per second and
+the display rate. Known limits: a cap of 30 runs the 120 Hz simulation ~9 % slow (every tick needs the full 4
+substeps; raise `maxSubsteps`), and the controller only ever lowers the pixel ratio under vsync (as it always did).

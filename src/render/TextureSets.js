@@ -13,22 +13,44 @@
 //                                                  -> { map, normalMap, roughnessMap, aoMap?, size } | null
 //        (KTX2 CompressedTextures when the manifest set has `ktx2: true` and the GPU has ASTC / BC7 / ETC2 / BC1,
 //         else JPG; see "KTX2" below)
-//   makeTextureArray(renderer, sets, { size, base, manifest, onProgress, ktx2? })
+//   makeTextureArray(renderer, sets, { size, base, manifest, onProgress, ktx2?, free? })
 //        sets: [{ role, id|null, size (m), tint (bool), proc (fallback kind) }]
 //        -> { albedo, normal, sizes, tintable, layers, loaded, wanted }
 //        albedo (sRGB DataArrayTexture): rgb = albedo (tintable sets normalised to neutral grey), a = AO
 //        normal (linear):                rg = tangent normal xy (OpenGL), b = roughness
+//        (procedural layers generated in a worker pool, see "Procedural layers" below; `free: false` keeps the CPU
+//         copies albedo.image.data / normal.image.data after the GPU upload, e.g. to hash them)
 //   TextureSets.stats / .options / .configure(o)   per-set path (ktx2 | jpg | mixed | procedural), bytes, decode ms,
-//                                                  GPU bytes; one `[TextureSets]` summary line per load wave
+//                                                  main-thread packing ms, GPU bytes; one `[TextureSets]` summary
+//                                                  line per load wave
 //   ktx2Support(renderer)                          -> { loader (shared KTX2Loader), formats, ready } | null
 //   ?ktx2=0 (or ?nokx) in the page URL forces the JPG path (A/B comparisons)
-//   proceduralPbr(kind, size, seed)               -> { alb, hgt, rgh } float maps (fallback painter)
+//   ?procworkers=0 generates procedural array layers on the main thread (A/B of their main-thread cost; =N caps the
+//   pool at N workers); overrides TextureSets.options.proceduralWorkers
+//   proceduralPbr(kind, size, seed)               -> { alb, hgt, rgh } float maps (fallback painter; lives in
+//                                                  proceduralPbr.js with the layer packing, re-exported here)
 //   makeAsphaltTexture / makePavingTexture (= makeConcreteTexture) / makeGroundTexture / makeGrassTexture /
 //   makeWaterNormalTexture (renderer)             -> tileable CanvasTexture
 //   makeCanvas, paintCanvas, finishTexture, makeDataArrayTexture        low-level helpers
+//
+// Procedural layers off the main thread. An array layer without photo maps (id-less sets, roles the manifest does not
+// list, sets whose diff / normal map failed) used to be generated in the packing loop: proceduralTexels (256 px of fBm
+// noise, tint normalisation, sRGB / normal packing) costs ~20-40 ms per layer on an M-series core, 64-132 ms for
+// Canyon Run's three, on the thread that is the bottleneck during load. It now runs in a small pool of module workers
+// (proceduralTextures.worker.js; up to TextureSets.options.proceduralWorkers, spawned on demand, one job each, lowest
+// layer first, retired after 10 s idle). makeTextureArray dispatches a layer as soon as it is known to be procedural
+// (id-less layers before the manifest is even fetched, the others once the manifest / their fetches tell), so the
+// noise overlaps the downloads and whatever the caller does meanwhile; when the loop reaches the layer it only
+// nearest-tiles the returned 256 px texels into its slice of the arrays (~1 ms at 1024 px, tileTexels). Both threads
+// run the same module code (proceduralPbr.js), so the bytes equal the in-thread path's, which still runs without
+// `Worker` (Node, the headless tests), with `proceduralWorkers: false`, and for every layer once a worker failed to
+// load / errored / did not answer within 10 s (one console warning, then in-thread for the rest of the page).
+// stats: packMs of a procedural layer = its main-thread cost (whole generation in-thread, or dispatch + tiling),
+// procIn = 'worker' | 'main', workerMs = generation time in the worker; totals.procMs / workerMs / procWorker.
 import * as THREE from 'three';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { mulberry32, pfbm, hash2 } from './noise.js';
+import { proceduralPbr, proceduralTexels, tileTexels } from './proceduralPbr.js';
 
 // ------------------------------------------------------------------ low-level helpers
 /** Canvas element of w x h. */
@@ -55,14 +77,18 @@ export function finishTexture(tex, renderer, srgb = true, repeat = true, maxAnis
   return tex;
 }
 
-/** Fill a canvas with fn(x, y) -> [r, g, b] (0..255); returns its 2D context for further drawing. */
+/**
+ * Fill a canvas with fn(x, y, out) -> [r, g, b] (0..255); returns its 2D context for further drawing. `out` is a
+ * reusable 3-array the painter may fill and return instead of allocating one per texel (a megapixel of short-lived
+ * arrays otherwise, most of a painter's time in the GC).
+ */
 export function paintCanvas(c, fn) {
   const g = ctx2d(c);
   const img = g.createImageData(c.width, c.height);
-  const d = img.data;
-  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
-    const o = (y * c.width + x) * 4;
-    const v = fn(x, y);
+  const d = img.data, out = [0, 0, 0], W = c.width, H = c.height;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    const v = fn(x, y, out) || out;
     d[o] = v[0]; d[o + 1] = v[1]; d[o + 2] = v[2]; d[o + 3] = 255;
   }
   g.putImageData(img, 0, 0);
@@ -90,14 +116,14 @@ export function makeDataArrayTexture(data, size, layers, srgb, renderer, { free 
 export function makeAsphaltTexture(renderer) {
   const S = 1024, c = makeCanvas(S);
   const rnd = mulberry32(11);
-  const g = paintCanvas(c, (x, y) => {
+  const g = paintCanvas(c, (x, y, o) => {
     const u = x / S, v = y / S;
     const big = pfbm(u, v, 4, 4, 1);
     const fine = hash2(x * 3 + 1, y * 7 + 3);
     const grain = pfbm(u, v, 64, 2, 5);
     let l = 46 + big * 22 + (fine - 0.5) * 26 + (grain - 0.5) * 14;
     if (fine > 0.985) l += 40; // light aggregate stones
-    return [l, l * 1.0, l * 1.02];
+    o[0] = l; o[1] = l * 1.0; o[2] = l * 1.02; return o;
   });
   // patch repairs and cracks
   g.globalAlpha = 0.25;
@@ -121,7 +147,7 @@ export function makeAsphaltTexture(renderer) {
 /** Concrete paving slabs, 4 x 4 per tile with joints (512 px; ~2 m tile). */
 export function makePavingTexture(renderer) {
   const S = 512, c = makeCanvas(S);
-  const g = paintCanvas(c, (x, y) => {
+  const g = paintCanvas(c, (x, y, o) => {
     const u = x / S, v = y / S;
     const n = pfbm(u, v, 8, 4, 21);
     const f = hash2(x + 9, y * 3);
@@ -130,7 +156,7 @@ export function makePavingTexture(renderer) {
     const jx = x % 128, jy = y % 128;
     if (jx < 2 || jy < 2) l -= 52;
     else if (jx < 4 || jy < 4) l -= 12;
-    return [l, l * 0.985, l * 0.95];
+    o[0] = l; o[1] = l * 0.985; o[2] = l * 0.95; return o;
   });
   g.globalAlpha = 1;
   return finishTexture(new THREE.CanvasTexture(c), renderer);
@@ -140,13 +166,13 @@ export const makeConcreteTexture = makePavingTexture;
 /** Generic weathered ground with faint large slabs (1024 px; ~6 m tile). */
 export function makeGroundTexture(renderer) {
   const S = 1024, c = makeCanvas(S);
-  paintCanvas(c, (x, y) => {
+  paintCanvas(c, (x, y, o) => {
     const u = x / S, v = y / S;
     const n = pfbm(u, v, 3, 5, 31);
     const f = hash2(x * 5, y * 11 + 1);
     const slabs = (x % 256 < 2 || y % 256 < 2) ? -30 : 0;
     const l = 118 + n * 40 + (f - 0.5) * 18 + slabs;
-    return [l * 1.0, l * 0.98, l * 0.93];
+    o[0] = l * 1.0; o[1] = l * 0.98; o[2] = l * 0.93; return o;
   });
   return finishTexture(new THREE.CanvasTexture(c), renderer);
 }
@@ -154,13 +180,13 @@ export function makeGroundTexture(renderer) {
 /** Grass (512 px; ~4 m tile). */
 export function makeGrassTexture(renderer) {
   const S = 512, c = makeCanvas(S);
-  paintCanvas(c, (x, y) => {
+  paintCanvas(c, (x, y, o) => {
     const u = x / S, v = y / S;
     const n = pfbm(u, v, 4, 5, 41);
     const m = pfbm(u, v, 16, 3, 43);
     const f = hash2(x * 13, y * 17);
     const l = 0.75 + n * 0.45 + (f - 0.5) * 0.35;
-    return [52 * l + m * 18, 92 * l + m * 20, 34 * l];
+    o[0] = 52 * l + m * 18; o[1] = 92 * l + m * 20; o[2] = 34 * l; return o;
   });
   return finishTexture(new THREE.CanvasTexture(c), renderer);
 }
@@ -174,59 +200,20 @@ export function makeWaterNormalTexture(renderer) {
     hgt[y * S + x] = pfbm(u, v, 6, 5, 51, 0.55) + 0.35 * pfbm(u, v, 24, 3, 53);
   }
   const c = makeCanvas(S);
-  paintCanvas(c, (x, y) => {
+  paintCanvas(c, (x, y, o) => {
     const xm = (x + S - 1) % S, xp = (x + 1) % S, ym = (y + S - 1) % S, yp = (y + 1) % S;
     const dx = (hgt[y * S + xp] - hgt[y * S + xm]) * 6;
     const dy = (hgt[yp * S + x] - hgt[ym * S + x]) * 6;
     const l = Math.hypot(dx, dy, 1);
-    return [(-dx / l * 0.5 + 0.5) * 255, (-dy / l * 0.5 + 0.5) * 255, (1 / l * 0.5 + 0.5) * 255];
+    o[0] = (-dx / l * 0.5 + 0.5) * 255; o[1] = (-dy / l * 0.5 + 0.5) * 255; o[2] = (1 / l * 0.5 + 0.5) * 255; return o;
   });
   return finishTexture(new THREE.CanvasTexture(c), renderer, false);
 }
 
 // ------------------------------------------------------------------ procedural PBR fallback
-/**
- * Fallback material painter: linear albedo (rgb 0..1), height (0..1) and roughness per pixel, tileable.
- * kinds: brick, panel, stucco, siding, corrugated, slate, grass, plain, fabric; anything else = rough concrete.
- */
-export function proceduralPbr(kind, S, seed) {
-  const alb = new Float32Array(S * S * 3), hgt = new Float32Array(S * S), rgh = new Float32Array(S * S);
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const u = x / S, v = y / S, i = y * S + x;
-    const n = pfbm(u, v, 8, 4, seed), f = hash2(x * 3 + seed, y * 7);
-    let a = 0.72 + (n - 0.5) * 0.25 + (f - 0.5) * 0.08, h = n * 0.3, r = 0.85;
-    let c = [a, a, a];
-    if (kind === 'brick') {
-      const rows = 12, row = Math.floor(v * rows), bw = 1 / 5, off = (row % 2) * bw * 0.5;
-      const bx = (u + off) / bw, fx = bx - Math.floor(bx), fy = v * rows - row;
-      const mort = fx < 0.05 || fy < 0.12;
-      const k = hash2(Math.floor(bx) + 31, row + seed);
-      c = mort ? [0.62, 0.6, 0.57] : [0.55 + k * 0.15, 0.27 + k * 0.08, 0.2 + k * 0.05];
-      h = mort ? 0.1 : 0.7 + n * 0.2; r = mort ? 0.95 : 0.8;
-    } else if (kind === 'panel') {
-      const j = (u * 2) % 1 < 0.01 || (v * 2) % 1 < 0.01;
-      a = 0.7 + (n - 0.5) * 0.12 + (f - 0.5) * 0.12; c = [a, a, a]; h = j ? 0 : 0.6 + n * 0.1; r = 0.7;
-    } else if (kind === 'stucco') {
-      a = 0.78 + (n - 0.5) * 0.1 + (f - 0.5) * 0.1; c = [a, a, a]; h = 0.5 + f * 0.3 + n * 0.2; r = 0.9;
-    } else if (kind === 'siding') {
-      const bd = (v * 8) % 1; a = 0.78 + (n - 0.5) * 0.06 - (bd < 0.08 ? 0.25 : 0); c = [a, a, a]; h = bd; r = 0.7;
-    } else if (kind === 'corrugated') {
-      const s = 0.5 + 0.5 * Math.sin(u * Math.PI * 2 * 14); a = 0.6 + s * 0.2; c = [a, a, a]; h = s; r = 0.45;
-    } else if (kind === 'slate') {
-      const rows = 10, row = Math.floor(v * rows), off = (row % 2) * 0.05;
-      const fx = ((u + off) * 10) % 1, fy = v * rows - row, k = hash2(Math.floor((u + off) * 10), row);
-      a = 0.32 + k * 0.08 - (fy > 0.85 ? 0.1 : 0) - (fx < 0.04 ? 0.08 : 0); c = [a * 0.95, a * 0.97, a]; h = fy; r = 0.75;
-    } else if (kind === 'grass') {
-      c = [0.18 + n * 0.12, 0.34 + n * 0.16 + f * 0.08, 0.1 + n * 0.05]; h = f; r = 0.95;
-    } else if (kind === 'plain') {
-      a = 0.8 + (n - 0.5) * 0.04; c = [a, a, a]; h = 0.5; r = 0.55;
-    } else if (kind === 'fabric') {
-      const w = ((Math.floor(u * 160) + Math.floor(v * 160)) % 2) * 0.06; a = 0.75 + w + (n - 0.5) * 0.05; c = [a, a, a]; h = w * 8; r = 0.9;
-    }
-    alb[i * 3] = c[0]; alb[i * 3 + 1] = c[1]; alb[i * 3 + 2] = c[2]; hgt[i] = h; rgh[i] = r;
-  }
-  return { alb, hgt, rgh };
-}
+// proceduralPbr (the fallback material painter) and the array-layer packing (proceduralTexels / tileTexels) live in
+// proceduralPbr.js: pure JS, shared with proceduralTextures.worker.js. Re-exported for existing importers.
+export { proceduralPbr };
 
 // ------------------------------------------------------------------ manifest + loading
 /** Default texture root: `${import.meta.env.BASE_URL}textures/` under Vite, else `/textures/`. */
@@ -285,6 +272,12 @@ export const TextureSets = {
                            // (both end up RGBA8 in the array), true = always .ktx2, false = always .jpg
     basisPath: null,       // transcoder folder (default `${BASE_URL}basis/`)
     workers: 3,            // RGBA transcode workers for the array path (KTX2Loader keeps its own pool of 4)
+    proceduralWorkers: true, // texture arrays: procedural layers generated in module workers (see header), true = up
+                           // to 4 (hardwareConcurrency - 1), a number = at most that many, false = on the main thread
+                           // as before. On by default although it is new behaviour, because only *where* the noise
+                           // runs changes: same module code and packing, byte-identical layers (content hash); no
+                           // Worker (Node / tests) or a failing worker = the previous in-thread path. URL
+                           // ?procworkers=0 / =N overrides it (A/B in the browser without code changes)
     log: true,             // one summary console line per load wave
   },
   stats: null,
@@ -299,10 +292,14 @@ function freshStats() {
     // `${consumer}:${id}` (consumer 'set' = loadTextureSet, 'array' = a makeTextureArray layer) ->
     //   { id, consumer, path: 'ktx2' | 'jpg' | 'mixed' | 'procedural' | 'missing', maps: { map: 'ktx2' | 'jpg' | 'missing', ... },
     //     bytes (downloaded; per map in mapBytes), ms (wall time from the call to ready), decodeMs (per-map decode / transcode time after the
-    //     download, summed; includes worker queueing), packMs (array layers: main-thread readback + packing),
+    //     download, summed; includes worker queueing), packMs (array layers: main-thread readback + packing, 0.1 ms;
+    //     procedural layers: the whole generation in-thread, or the dispatch + tiling of a worker's texels),
+    //     procIn: 'worker' | 'main' + workerMs (procedural layers only: where the noise ran, its time in the worker),
     //     gpuBytes (textures this set owns; the arrays' RGBA8 storage is added to totals.gpuBytes), formats }
     sets: {},
-    totals: { sets: 0, ktx2: 0, jpg: 0, mixed: 0, procedural: 0, missing: 0, bytes: 0, ktx2Bytes: 0, jpgBytes: 0, gpuBytes: 0, decodeMs: 0, packMs: 0, wallMs: 0 },
+    // procMs = the procedural layers' share of packMs (main thread), workerMs = their generation time in workers,
+    // procWorker = how many of them were generated in workers
+    totals: { sets: 0, ktx2: 0, jpg: 0, mixed: 0, procedural: 0, missing: 0, bytes: 0, ktx2Bytes: 0, jpgBytes: 0, gpuBytes: 0, decodeMs: 0, packMs: 0, procMs: 0, workerMs: 0, procWorker: 0, wallMs: 0 },
   };
 }
 TextureSets.resetStats();
@@ -332,6 +329,7 @@ function ktx2Wanted(opt) {
 
 // --- stats bookkeeping (a "wave" = loads that overlap in time; one summary line per wave)
 let _pending = 0, _waveStart = 0, _logTimer = 0;
+const r1 = (v) => Math.round(v * 10) / 10; // ms fields at 0.1 ms (procedural layers on the worker path cost ~1 ms)
 function beginStat(consumer, id) {
   if (_pending++ === 0 && !_logTimer) _waveStart = performance.now();
   if (_logTimer) { clearTimeout(_logTimer); _logTimer = 0; }
@@ -344,13 +342,14 @@ function noteMap(st, slot, path, bytes = 0, decodeMs = 0, format = null) {
 function endStat(st, path) {
   const vals = Object.values(st.maps).filter((v) => v !== 'missing');
   st.path = path || (vals.length === 0 ? 'missing' : vals.every((v) => v === vals[0]) ? vals[0] : 'mixed');
-  st.ms = Math.round(performance.now() - st.t0); st.decodeMs = Math.round(st.decodeMs); st.packMs = Math.round(st.packMs);
+  st.ms = Math.round(performance.now() - st.t0); st.decodeMs = Math.round(st.decodeMs); st.packMs = r1(st.packMs);
   delete st.t0;
   const S = TextureSets.stats, T = S.totals, key = `${st.consumer}:${st.id}`;
   if (!S.sets[key]) T.sets++;
   S.sets[key] = st;
   T[st.path] = (T[st.path] || 0) + 1;
-  T.bytes += st.bytes; T.gpuBytes += st.gpuBytes; T.decodeMs += st.decodeMs; T.packMs += st.packMs;
+  T.bytes += st.bytes; T.gpuBytes += st.gpuBytes; T.decodeMs += st.decodeMs; T.packMs = r1(T.packMs + st.packMs);
+  if (st.procIn) { T.procMs = r1(T.procMs + st.packMs); T.workerMs = r1(T.workerMs + st.workerMs); if (st.procIn === 'worker') T.procWorker++; }
   for (const [slot, p] of Object.entries(st.maps)) if (p === 'ktx2' || p === 'jpg') T[p + 'Bytes'] += st.mapBytes ? st.mapBytes[slot] || 0 : 0;
   if (--_pending === 0) _logTimer = setTimeout(logSummary, 300);
 }
@@ -361,7 +360,11 @@ function logSummary() {
   if (!TextureSets.options.log) return;
   const fm = new Set(); for (const s of Object.values(S.sets)) for (const f of s.formats) fm.add(f);
   const by = ['ktx2', 'jpg', 'mixed', 'procedural', 'missing'].filter((k) => T[k]).map((k) => `${k} ${T[k]}`).join(' / ');
-  console.info(`[TextureSets] ${T.sets} sets: ${by} · ${(T.bytes / 1048576).toFixed(1)} MB downloaded (ktx2 ${(T.ktx2Bytes / 1048576).toFixed(1)}, jpg ${(T.jpgBytes / 1048576).toFixed(1)}) · ~${(T.gpuBytes / 1048576).toFixed(0)} MB GPU · ready in ${T.wallMs} ms (main-thread packing ${T.packMs} ms) · ${[...fm].join(', ') || 'no textures'}${S.ktx2 === false ? ' (KTX2 off)' : ''}`);
+  // procedural layers: their main-thread share of the packing, and where the noise ran (e.g. "procedural 3 layers in
+  // workers: 2.6 ms main-thread, 95 ms off-thread"; with proceduralWorkers off "procedural 3 layers: 71.4 ms main-thread")
+  const np = T.procedural, nw = T.procWorker;
+  const proc = np ? `; procedural ${np} layer${np > 1 ? 's' : ''}${nw === np ? ' in workers' : nw ? ` (${nw} in workers)` : ''}: ${T.procMs.toFixed(1)} ms main-thread${nw ? `, ${T.workerMs.toFixed(0)} ms off-thread` : ''}` : '';
+  console.info(`[TextureSets] ${T.sets} sets: ${by} · ${(T.bytes / 1048576).toFixed(1)} MB downloaded (ktx2 ${(T.ktx2Bytes / 1048576).toFixed(1)}, jpg ${(T.jpgBytes / 1048576).toFixed(1)}) · ~${(T.gpuBytes / 1048576).toFixed(0)} MB GPU · ready in ${T.wallMs} ms (main-thread packing ${T.packMs.toFixed(1)} ms${proc}) · ${[...fm].join(', ') || 'no textures'}${S.ktx2 === false ? ' (KTX2 off)' : ''}`);
 }
 function trackBytes(st, slot, bytes) { (st.mapBytes || (st.mapBytes = {}))[slot] = bytes; }
 
@@ -554,6 +557,98 @@ async function loadKtx2Rgba(bufP, S, prio = 0) {
   return { data, up: true, bytes, ms: res.ms };
 }
 
+// --- procedural layer worker pool (texture-array path; see "Procedural layers" in the header): module workers running
+// proceduralTexels, spawned on demand up to the option's count, one job in flight per worker, lowest layer first (the
+// packing loop places layers in order). A worker that fails to load, errors or does not answer within PROC_TIMEOUT ms
+// fails the pool for the rest of the page: every pending job rejects and those layers are generated in-thread (same
+// bytes, only main-thread time lost). Workers retire 10 s after the last job, like rgbaPool's.
+const PROC_PX = 256, PROC_TIMEOUT = 10000; // procedural layer resolution (nearest-tiled up to the array size); ms
+let _proc = null, _procFailed = null, _procWarned = false;
+function warnProc(msg) { if (!_procWarned) console.warn(`[TextureSets] procedural texture workers unavailable (${msg}); generating procedural layers on the main thread`); _procWarned = true; }
+/** URL switch: ?procworkers=0 -> in-thread, ?procworkers=N -> at most N workers, else null (the option decides). */
+function urlProcWorkers() {
+  try {
+    const v = new URLSearchParams(globalThis.location ? globalThis.location.search : '').get('procworkers');
+    if (v !== null && v !== '') return Math.max(0, +v | 0);
+  } catch { /* no location */ }
+  return null;
+}
+/** Workers for procedural layers; 0 = generate in-thread (no Worker: Node / tests; option off; the pool failed). */
+function procWorkerCount() {
+  const u = urlProcWorkers(), o = u !== null ? u : TextureSets.options.proceduralWorkers;
+  if (!o || _procFailed || typeof Worker === 'undefined') return 0;
+  if (o === true) return Math.max(1, Math.min(4, ((globalThis.navigator && globalThis.navigator.hardwareConcurrency) || 4) - 1));
+  return Math.max(0, o | 0);
+}
+function procPool(n) {
+  if (_proc) return _proc;
+  const workers = [], busy = [], timers = [], jobs = new Map(), queue = [];
+  let seq = 0, idle = 0, dead = false;
+  const retire = () => { idle = 0; if (jobs.size) return; for (const w of workers) w.terminate(); if (_proc === pool) _proc = null; };
+  const failAll = (msg) => {
+    if (dead) return; // every worker of a broken pool reports it (e.g. the module 404s); act once
+    dead = true;
+    warnProc(msg);
+    _procFailed = msg || 'worker failed';
+    for (const t of timers) clearTimeout(t);
+    if (idle) { clearTimeout(idle); idle = 0; }
+    for (const w of workers) { try { w.terminate(); } catch { /* gone */ } }
+    queue.length = 0;
+    for (const [id, j] of jobs) { jobs.delete(id); j.rej(new Error(_procFailed)); }
+    if (_proc === pool) _proc = null;
+  };
+  const spawn = () => {
+    const i = workers.length;
+    // keep this literal form: it is what Vite detects to bundle the worker (+ proceduralPbr.js / noise.js) and rewrite
+    // its URL in builds; served as a module worker in dev
+    const w = new Worker(new URL('./proceduralTextures.worker.js', import.meta.url), { type: 'module' });
+    w.onmessage = (e) => {
+      const d = e.data;
+      if (d.error) return failAll(d.error); // deterministic code: what throws for one layer throws for all of them
+      clearTimeout(timers[i]); timers[i] = 0;
+      if (busy[i] === d.id) busy[i] = 0;
+      const j = jobs.get(d.id);
+      if (j) { jobs.delete(d.id); j.res(d); }
+      pump();
+      if (!jobs.size && !idle) idle = setTimeout(retire, 10000);
+    };
+    w.onerror = (e) => { if (e && e.preventDefault) e.preventDefault(); failAll((e && e.message) || 'worker failed to load'); };
+    w.onmessageerror = () => failAll('unreadable worker message');
+    workers.push(w); busy.push(0); timers.push(0);
+  };
+  const pump = () => {
+    while (queue.length) {
+      let i = busy.indexOf(0);
+      if (i < 0) { if (workers.length >= n) return; spawn(); i = workers.length - 1; }
+      let b = 0; for (let k = 1; k < queue.length; k++) if (queue[k].prio < queue[b].prio) b = k;
+      const j = queue.splice(b, 1)[0];
+      busy[i] = j.msg.id;
+      timers[i] = setTimeout(() => failAll(`no answer within ${PROC_TIMEOUT / 1000} s`), PROC_TIMEOUT);
+      workers[i].postMessage(j.msg);
+    }
+  };
+  const pool = {
+    /** P x P texels of one procedural layer (proceduralTexels) -> Promise<{ pa, pn, ms }>; rejects when the pool fails. */
+    run(kind, P, seed, tint, prio = 0) {
+      if (idle) { clearTimeout(idle); idle = 0; }
+      return new Promise((res, rej) => {
+        const id = ++seq;
+        jobs.set(id, { res, rej }); queue.push({ prio, msg: { id, kind, P, seed, tint } });
+        try { pump(); } catch (e) { failAll(e && e.message ? e.message : String(e)); } // new Worker threw (CSP, file://)
+      });
+    },
+  };
+  return (_proc = pool);
+}
+/** Dispatch one procedural layer -> Promise<{ pa, pn, ms }>, or null when it is to be generated in-thread. */
+function procJob(kind, seed, tint, prio) {
+  const n = procWorkerCount();
+  if (!n) return null;
+  const job = procPool(n).run(kind, PROC_PX, seed, tint, prio);
+  job.catch(() => {}); // handled where the layer is placed (in-thread fallback); no unhandled rejection meanwhile
+  return job;
+}
+
 /**
  * Load one set as plain THREE textures: `.ktx2` CompressedTextures when the manifest lists them and the renderer has a
  * compressed format (see KTX2 notes above), otherwise browser-decoded JPGs (TextureLoader, flipY). Repeat-wrapped, max
@@ -595,12 +690,24 @@ export async function loadTextureSet(id, { renderer = null, base = textureBase()
 /**
  * Pack material sets into two DataArrayTextures (see header). Photo sets are fetched + decoded in parallel
  * (JPG decode is off-thread via createImageBitmap, KTX2 transcode in a worker pool) and packed sequentially; missing
- * sets fall back to proceduralPbr at 256 px tiled up to `size`. Tintable sets are normalised to a neutral mean so a
- * per-instance tint reaches real paint albedos. With KTX2 each map comes from whichever of `.ktx2` / `.jpg`
- * TextureSets.options.arrayKtx2 picks (default: the smaller download); both are packed into the same RGBA8 layers,
- * so the shaders that sample the arrays see the same layout either way. Never throws for missing files.
+ * sets fall back to proceduralPbr at 256 px tiled up to `size`, generated in the procedural worker pool from the
+ * moment a layer is known to need it (TextureSets.options.proceduralWorkers; same bytes as in-thread). Tintable sets
+ * are normalised to a neutral mean so a per-instance tint reaches real paint albedos. With KTX2 each map comes from
+ * whichever of `.ktx2` / `.jpg` TextureSets.options.arrayKtx2 picks (default: the smaller download); both are packed
+ * into the same RGBA8 layers, so the shaders that sample the arrays see the same layout either way. `free: false`
+ * keeps albedo.image.data / normal.image.data after the GPU upload (default: freed). Never throws for missing files.
  */
-export async function makeTextureArray(renderer, sets, { size = 1024, base = textureBase(), manifest, onProgress, ktx2 } = {}) {
+export async function makeTextureArray(renderer, sets, { size = 1024, base = textureBase(), manifest, onProgress, ktx2, free = true } = {}) {
+  // procedural layers go to the worker pool as soon as they are known: id-less sets now (before the manifest), roles
+  // the manifest lacks and photo sets whose diff / normal failed below. proc[l] = { job (null = in-thread), ms: the
+  // main-thread cost of dispatching it }; the seed depends only on the layer index, the texels on kind / seed / tint
+  const L = sets.length, proc = new Array(L).fill(null);
+  const procSeed = (l) => 97 + l * 13;
+  const dispatch = (l) => {
+    if (!proc[l]) { const t = performance.now(), s = sets[l], job = procJob(s.proc, procSeed(l), !!s.tint, l); proc[l] = { job, ms: performance.now() - t }; }
+    return proc[l];
+  };
+  for (let l = 0; l < L; l++) if (!sets[l].id) dispatch(l);
   if (manifest === undefined) {
     // boot the transcode workers while the manifest loads (they retire after 10 s idle if it lists no .ktx2)
     if (ktx2Wanted(ktx2) && TextureSets.options.arrayKtx2 !== false && !_rgbaFailed && typeof Worker !== 'undefined') rgbaPool();
@@ -610,7 +717,7 @@ export async function makeTextureArray(renderer, sets, { size = 1024, base = tex
     const m = manifest && manifest.sets && manifest.sets[s.role];
     return { ...s, size: m && m.size ? m.size[0] : s.size, maps: m ? m.maps || {} : null, kx: m && m.ktx2Maps ? m.ktx2Maps : null };
   });
-  const S = size, L = sets.length;
+  const S = size;
   const A = new Uint8Array(S * S * 4 * L), N = new Uint8Array(S * S * 4 * L);
   const c = makeCanvas(S), scratch = { g: ctx2d(c) };
   let loaded = 0, done = 0;
@@ -638,6 +745,11 @@ export async function makeTextureArray(renderer, sets, { size = 1024, base = tex
     return Promise.all(ARRAY_MAPS.map(get)).then((r) => { onProgress && onProgress(++done / Math.max(1, want)); return r; });
   };
   const jobs = sets.map(fetchSet);
+  const isPhoto = (imgs) => !!(imgs && imgs[0] && imgs[1]); // else the layer is procedural
+  sets.forEach((s, l) => {
+    if (!s.id || (manifest && !s.maps)) dispatch(l);
+    else jobs[l].then((imgs) => { if (!isPhoto(imgs)) dispatch(l); }, () => dispatch(l));
+  });
   // a decoded map as { d: RGBA8 S x S, up: rows bottom-up (KTX2) or top-down (canvas readback of a JPG) }
   const pix = (r) => (!r ? null : r.data ? { d: r.data, up: true } : { d: pixelsOf(r.bmp, S, scratch), up: false });
   for (let l = 0; l < L; l++) {
@@ -645,7 +757,7 @@ export async function makeTextureArray(renderer, sets, { size = 1024, base = tex
     let imgs = null;
     try { imgs = await jobs[l]; } catch { imgs = null; }
     const o = l * S * S * 4, row = S * 4;
-    if (imgs && imgs[0] && imgs[1]) {
+    if (isPhoto(imgs)) {
       const t = performance.now();
       const dif = pix(imgs[0]);
       // albedo (+ optional neutralisation for tintable sets)
@@ -679,42 +791,22 @@ export async function makeTextureArray(renderer, sets, { size = 1024, base = tex
       if (stats[l]) stats[l].packMs += performance.now() - t; // canvas readback + packing
       loaded++;
     } else {
-      // procedural fallback at 256 px, nearest-tiled up to S
-      const P = 256, pr = proceduralPbr(s.proc, P, 97 + l * 13);
-      if (s.tint) { // same neutral mean as the normalised photo sets
-        const m = [0, 0, 0];
-        for (let i = 0; i < P * P; i++) { m[0] += pr.alb[i * 3]; m[1] += pr.alb[i * 3 + 1]; m[2] += pr.alb[i * 3 + 2]; }
-        const k = m.map((v) => 0.58 / Math.max(0.02, v / (P * P)));
-        for (let i = 0; i < P * P; i++) for (let c = 0; c < 3; c++) pr.alb[i * 3 + c] *= k[c];
-      }
-      // texel values once per source texel (P x P), then nearest-tiled into the S x S layer
-      const PA = new Uint8Array(P * P * 4), PN = new Uint8Array(P * P * 4);
-      for (let py = 0; py < P; py++) for (let px = 0; px < P; px++) {
-        const i = py * P + px, d = i * 4;
-        PA[d] = Math.min(255, Math.pow(pr.alb[i * 3], 1 / 2.2) * 255); PA[d + 1] = Math.min(255, Math.pow(pr.alb[i * 3 + 1], 1 / 2.2) * 255); PA[d + 2] = Math.min(255, Math.pow(pr.alb[i * 3 + 2], 1 / 2.2) * 255); PA[d + 3] = 255;
-        const xm = (px + P - 1) % P, xp = (px + 1) % P, ym = (py + P - 1) % P, yp = (py + 1) % P;
-        const dx = (pr.hgt[py * P + xp] - pr.hgt[py * P + xm]) * 2.5, dy = (pr.hgt[yp * P + px] - pr.hgt[ym * P + px]) * 2.5;
-        const ln = Math.hypot(dx, dy, 1);
-        PN[d] = (-dx / ln * 0.5 + 0.5) * 255; PN[d + 1] = (-dy / ln * 0.5 + 0.5) * 255; PN[d + 2] = pr.rgh[i] * 255; PN[d + 3] = 255;
-      }
-      const xs = new Int32Array(S); for (let x = 0; x < S; x++) xs[x] = Math.floor((x * P) / S) * 4;
-      let lastPy = -1, lastRow = 0;
-      for (let y = 0; y < S; y++) {
-        const py = Math.floor((y * P) / S), d0 = o + y * row;
-        if (py === lastPy) { A.copyWithin(d0, lastRow, lastRow + row); N.copyWithin(d0, lastRow, lastRow + row); continue; }
-        const s0 = py * P * 4;
-        for (let x = 0; x < S; x++) {
-          const sx = s0 + xs[x], d = d0 + x * 4;
-          A[d] = PA[sx]; A[d + 1] = PA[sx + 1]; A[d + 2] = PA[sx + 2]; A[d + 3] = PA[sx + 3];
-          N[d] = PN[sx]; N[d + 1] = PN[sx + 1]; N[d + 2] = PN[sx + 2]; N[d + 3] = PN[sx + 3];
-        }
-        lastPy = py; lastRow = d0;
-      }
+      // procedural fallback at 256 px, nearest-tiled up to S: the worker's texels (dispatched earlier, normally done by
+      // now), else generated here; only the tiling (and the dispatch) is main-thread time on the worker path
+      const d = dispatch(l);
+      let r = null;
+      if (d.job) { try { r = await d.job; } catch (e) { warnProc(e && e.message ? e.message : e); } }
+      if (r && !(r.pa && r.pa.length === PROC_PX * PROC_PX * 4 && r.pn && r.pn.length === PROC_PX * PROC_PX * 4)) r = null;
+      const t = performance.now();
+      const px = r || proceduralTexels(s.proc, PROC_PX, procSeed(l), s.tint);
+      tileTexels(px.pa, px.pn, PROC_PX, S, A, N, o);
+      const st = stats[l] || (stats[l] = beginStat('array', `(${s.role})`)); // id-less / unlisted layer: always procedural
+      st.packMs += d.ms + performance.now() - t;
+      st.procIn = r ? 'worker' : 'main'; st.workerMs = r ? r1(r.ms) : 0;
     }
-    if (stats[l]) endStat(stats[l], imgs && imgs[0] && imgs[1] ? undefined : 'procedural');
-    else { const st = beginStat('array', `(${s.role})`); endStat(st, 'procedural'); } // id-less layer: always procedural
+    endStat(stats[l], isPhoto(imgs) ? undefined : 'procedural');
   }
-  const albedo = makeDataArrayTexture(A, S, L, true, renderer), normal = makeDataArrayTexture(N, S, L, false, renderer);
+  const albedo = makeDataArrayTexture(A, S, L, true, renderer, { free }), normal = makeDataArrayTexture(N, S, L, false, renderer, { free });
   // GPU memory of the two RGBA8 arrays (+ mips), credited to the wave's totals
   TextureSets.stats.totals.gpuBytes += 2 * S * S * 4 * L * MIP;
   return { albedo, normal, sizes: sets.map((s) => s.size), tintable: sets.map((s) => (s.tint ? 1 : 0)), layers: L, loaded, wanted: want };

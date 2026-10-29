@@ -10,6 +10,23 @@
 //   dispose?()
 // Each phase runs systems in registration order. Per-system CPU time (all phases, summed per frame) is
 // recorded in engine.profiler under the system's name, plus 'sim' (whole fixed loop) and 'render'.
+//
+// Frame pacing. requestAnimationFrame drives tick(). `targetFps` (option and live property; 0 = tick on every
+// callback, the default) caps the tick rate: a callback ticks once the time since the last tick is at least
+// 1000 / targetFps - 1 ms. The 1 ms absorbs timestamp jitter and timer clamping, so 60 on a 120 Hz screen ticks on
+// every 2nd callback and never stretches to a 3rd; a cap that does not divide the refresh rate settles on the next
+// rate below it that does (50 on 120 Hz runs at 40), so intervals stay even. Skipped callbacks only sample the
+// refresh rate; dt is the real time since the previous tick (the fixed-step accumulator sees skipped time once,
+// still bounded by maxSubsteps). `refreshRate` (Hz, 0 until known) is the display rate from the raw callback
+// interval, ticked or not (estimator in _frame); until it is known (~5 callbacks after start(), 10 at most) the
+// callbacks only measure, because a heavy first frame would show the frame rate instead of the screen's.
+// Adaptive resolution (every 2 s, steps of 0.25): budget = 1000 / 60 ms while uncapped (the original 18.5 / 11.5 ms
+// thresholds: the pixel ratio drops when the tick-interval EMA exceeds 1.11 x budget and rises under 0.69 x budget),
+// so a 120 Hz screen keeps full resolution at 60 fps as before; with targetFps the budget is 1000 / min(targetFps,
+// max(refreshRate, 60)) ms, e.g. targetFps 120 on a 120 Hz display = 9.25 / 5.75 ms (chases 120 fps at lower
+// resolution), targetFps 60 anywhere = 18.5 / 11.5 ms. A reading under 60 Hz is not trusted for the budget (a scene
+// missing every other vsync from its first frame looks exactly like a 30 Hz screen). Under vsync the interval never
+// drops below the budget, so in practice the ratio only comes down (as it always did on 60 Hz screens).
 import * as THREE from 'three';
 import { Profiler, ProfilerOverlay } from './Profiler.js';
 
@@ -22,7 +39,10 @@ export class Engine {
    * @param {HTMLElement} o.container
    * @param {number} [o.fixedHz=120]
    * @param {number} [o.maxSubsteps=4]
-   * @param {boolean} [o.adaptiveResolution=true]  scale pixel ratio to hold ~60 fps
+   * @param {number} [o.targetFps=0]  cap on ticks per second, 0 = every rAF callback (live: engine.targetFps = 60;
+   *   see header). At or below fixedHz / maxSubsteps (30 by default) a tick needs every substep and jitter makes the
+   *   simulation drop time (slow motion): raise maxSubsteps for caps that low.
+   * @param {boolean} [o.adaptiveResolution=true]  scale the pixel ratio to hold the frame budget (see header)
    * @param {number} [o.maxPixelRatio=2]
    * @param {object} [o.renderer]  extra WebGLRenderer options (e.g. { antialias: false } when post-processing)
    * @param {boolean} [o.shadows=true]
@@ -55,6 +75,11 @@ export class Engine {
     this.maxPR = Math.min(window.devicePixelRatio || 1, o.maxPixelRatio ?? 2);
     this.adaptive = o.adaptiveResolution !== false;
     this.pixelRatio = this.maxPR; this._frameEMA = 1 / 60; this._prTimer = 0;
+    /** Cap on ticks per second, 0 = every rAF callback (default). Live: read on every callback. */
+    this.targetFps = o.targetFps > 0 ? +o.targetFps : 0;
+    /** Display refresh rate (Hz) estimated from rAF timestamps; 0 until known. */
+    this.refreshRate = 0;
+    this._rafT = 0; this._rafMs = 0; this._rafN = 0; this._rafLong = 0; this._calib = 0; // refresh estimator (_frame)
     /** Override to render through a composer: (scene, camera, dt) => void */
     this.renderFn = (scene, camera) => this.renderer.render(scene, camera);
     /** Called with (cssWidth, cssHeight, pixelRatio) on resize / pixel-ratio changes (PostFX.setSize hooks here). */
@@ -110,13 +135,32 @@ export class Engine {
     this.onResize(width, height, this.pixelRatio);
   }
 
-  start() { if (this._running) return; this._running = true; this._last = now(); this._raf = requestAnimationFrame(this._frame); }
+  start() { if (this._running) return; this._running = true; this._last = now(); this._rafT = 0; this._calib = 10; this._raf = requestAnimationFrame(this._frame); }
   stop() { this._running = false; cancelAnimationFrame(this._raf); }
 
   _frame = (t) => {
     if (!this._running) return;
     cancelAnimationFrame(this._raf); // exactly one pending frame, even if _frame was invoked by hand
     this._raf = requestAnimationFrame(this._frame);
+    // Refresh estimate: mean, then 20-sample EMA, of the raw callback interval, whether or not the callback ticks.
+    // Only an interval within 0.7-1.5x the estimate refines it. A longer one is a dropped frame (busy main thread or
+    // GPU), not the screen: following it would let the frame budget slide down with the frame rate and stall
+    // adaptive resolution. A shorter one restarts the estimate (a faster screen, or a slow frame seeded it), and so
+    // do 10 s of nothing but longer ones (the rate itself dropped: another screen, Low Power Mode, Energy Saver's
+    // 30 fps; also a scene that never fits one refresh period, which then reads as its own rate). Published once
+    // 4 intervals agree with it.
+    const raw = this._rafT ? t - this._rafT : 0; this._rafT = t;
+    if (raw > 1 && raw < 250) { // 0 / NaN: first callback, or a call by hand; >= 250 ms: hidden tab, breakpoint
+      const m = this._rafMs;
+      if (raw > m * 0.7 && raw < m * 1.5) {
+        this._rafMs = m + (raw - m) / Math.min(20, ++this._rafN + 1); this._rafLong = 0;
+        if (this._rafN >= 4) this.refreshRate = this.profiler.frame.refresh = 1000 / this._rafMs;
+      } else if (!m || raw < m * 0.7 || (this._rafLong += raw) > 10000) { this._rafMs = raw; this._rafN = 0; this._rafLong = 0; }
+    }
+    if (!this.refreshRate && this._calib > 0) { this._calib--; this._last = t; return; } // measure first (header)
+    // pacing (see header): a callback less than 1000 / targetFps - 1 ms after the last tick is skipped
+    const fps = this.targetFps;
+    if (fps > 0 && t - this._last < 1000 / fps - 1) return;
     let dt = (t - this._last) / 1000; this._last = t;
     if (dt > 0.25) dt = 0.25; // tab was hidden
     else if (!(dt >= 0)) dt = 0; // first rAF timestamp can precede start()
@@ -162,8 +206,11 @@ export class Engine {
       this._frameEMA += (dt - this._frameEMA) * 0.05; this._prTimer += dt;
       if (this._prTimer > 2) {
         this._prTimer = 0;
-        if (this._frameEMA > 0.0185 && this.pixelRatio > 1) this.setPixelRatio(Math.max(1, this.pixelRatio - 0.25));
-        else if (this._frameEMA < 0.0115 && this.pixelRatio < this.maxPR) this.setPixelRatio(Math.min(this.maxPR, this.pixelRatio + 0.25));
+        // uncapped: the 60 fps budget as before (a 120 Hz screen keeps full resolution at 60 fps); capped: the cap, but
+        // never a budget tighter than the screen allows. targetFps: 120 is how a game asks for a ProMotion display's rate
+        const fps = this.targetFps, budget = 1 / (fps > 0 ? Math.min(fps, Math.max(this.refreshRate, 60)) : 60); // s; header
+        if (this._frameEMA > budget * 1.11 && this.pixelRatio > 1) this.setPixelRatio(Math.max(1, this.pixelRatio - 0.25));
+        else if (this._frameEMA < budget * 0.69 && this.pixelRatio < this.maxPR) this.setPixelRatio(Math.min(this.maxPR, this.pixelRatio + 0.25));
       }
     }
   }

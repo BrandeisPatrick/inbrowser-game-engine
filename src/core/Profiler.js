@@ -30,8 +30,9 @@ export class Profiler {
     this._open = new Map(); // cpu scope starts
     this._queries = [];     // pending gpu queries [{name, q}]
     this._gpuActive = null;
-    // ms/avg: CPU time of the frame; interval/fps: wall time between frames (what the player sees)
-    this.frame = { ms: 0, avg: 0, interval: 0, fps: 0, calls: 0, triangles: 0, memory: null, steps: 0 };
+    // ms/avg: CPU time of the frame; interval/fps: wall time between frames (what the player sees: ticks, so a
+    // targetFps cap shows here); refresh: display refresh rate in Hz, 0 until known (the Engine sets it from rAF times)
+    this.frame = { ms: 0, avg: 0, interval: 0, fps: 0, refresh: 0, calls: 0, triangles: 0, memory: null, steps: 0 };
     this._frameStart = 0;
     this.enabled = true;
   }
@@ -116,7 +117,7 @@ export class Profiler {
     const rows = [];
     for (const [k, v] of this.cpu) rows.push({ scope: `cpu:${k}`, avg: +v.avg.toFixed(2), max: +v.max.toFixed(2) });
     for (const [k, v] of this.gpu) rows.push({ scope: `gpu:${k}`, avg: +v.avg.toFixed(2), max: +v.max.toFixed(2), ...(this.gpuApprox ? { approx: true } : {}) });
-    rows.push({ scope: 'frame(cpu)', avg: +this.frame.avg.toFixed(2), max: +this.frame.ms.toFixed(2), fps: +this.frame.fps.toFixed(0), calls: this.frame.calls, tris: this.frame.triangles });
+    rows.push({ scope: 'frame(cpu)', avg: +this.frame.avg.toFixed(2), max: +this.frame.ms.toFixed(2), fps: +this.frame.fps.toFixed(0), hz: +this.frame.refresh.toFixed(0), calls: this.frame.calls, tris: this.frame.triangles });
     return rows;
   }
 }
@@ -137,7 +138,7 @@ export class ProfilerOverlay {
     if (!this.visible) return;
     this._t += dt; if (this._t < 0.25) return; this._t = 0;
     const f = this.p.frame;
-    let s = `${f.fps.toFixed(0)} fps  cpu ${f.avg.toFixed(1)} ms  calls ${f.calls}  tris ${(f.triangles / 1e6).toFixed(2)}M  steps ${f.steps}\n`;
+    let s = `${f.fps.toFixed(0)} fps${f.refresh ? ` / ${f.refresh.toFixed(0)} Hz` : ''}  cpu ${f.avg.toFixed(1)} ms  calls ${f.calls}  tris ${(f.triangles / 1e6).toFixed(2)}M  steps ${f.steps}\n`;
     for (const [k, v] of this.p.cpu) s += `cpu ${k.padEnd(12)} ${v.avg.toFixed(2).padStart(6)} ms\n`;
     const g = this.p.gpuApprox ? 'gpu~' : 'gpu ';
     for (const [k, v] of this.p.gpu) s += `${g}${k.padEnd(12)} ${v.avg.toFixed(2).padStart(6)} ms\n`;

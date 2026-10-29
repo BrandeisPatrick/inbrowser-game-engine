@@ -15,7 +15,8 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
 - As a git submodule of a game (what roadster does): `git submodule add https://github.com/BrandeisPatrick/inbrowser-game-engine.git engine`,
   list `engine` in the game's `workspaces`, and `npm install` links `node_modules/@vibe/engine -> engine`.
 - From git: `npm install github:BrandeisPatrick/inbrowser-game-engine` (pure ES module source, no build step).
-- Standalone: `npm install`, then `npm run dev` serves the Canyon Run sample at http://localhost:5190, `npm test`
+- Standalone: `npm install`, then `npm run dev` serves the Canyon Run sample at http://localhost:5190 (MacBook knobs:
+  `?fps=60` tick cap, `?shadows=pcf`, `?msaamax=`, `?procworkers=0`; see ENGINE.md "MacBook pass"), `npm test`
   runs the headless vehicle physics checks (Node >= 20), `npm run build` builds the sample into `dist/`.
 - Peer dependency: `three >= 0.170`. `npm run pack:check` lists the tarball (~100 files, ~440 kB) for
   `npm publish --access public` once a registry scope exists.
@@ -26,6 +27,11 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
   procedural textures.
 - `test/car-sim.mjs` — 73 headless checks of the Roadster vehicle model and the PhysicsWorld queries (`npm test`).
   The street-drive and traffic checks that need the San Francisco map live in the game repository (`dev/`).
+- `samples/city/` — dev-only harness: the procedural city in the browser at http://localhost:5190/city (free-fly
+  camera, post stack, F3 profiler), for seeing and measuring the world layer without map data.
+- `test/world-build.mjs` — builds the procedural city headless (`MapWorld` with `renderer: null`, no DOM: the canvas
+  painters run against `test/helpers/dom-shim.mjs`) and pins its stats, physics queries and 10 s of deterministic
+  traffic (`npm test` runs it after car-sim; ~2 s).
 
 ## Layers
 - `src/world/` — data-driven city worlds: `MapWorld` (map + terrain + options + plugins) and its systems: `Terrain`,

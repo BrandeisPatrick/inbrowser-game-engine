@@ -24,7 +24,11 @@ import * as THREE from 'three';
  * @param {Uint8Array} [o.triClass]  per source triangle class 0..255 (default geo.userData.triClass): each tile
  *        stores its triangles ordered by class and geometry.userData.classStarts[c] = first index of class c, so a
  *        pass can draw a class prefix with drawRange (e.g. shadowDrawRange)
- * @returns {{geometry: THREE.BufferGeometry, tris: number, key: string}[] | null}
+ * @param {boolean} [o.localOrigin=false]  store each tile's vertices relative to the tile's XZ bounds centre and
+ *        return it as `center` [x, 0, z] (chunkMesh places the tile mesh there, so world positions are unchanged).
+ *        three.js sorts opaque objects front to back by object position: tiles at the origin all sort equal and
+ *        draw in creation order, tiles at their own centre draw near to far (less overdraw, earlier depth rejects)
+ * @returns {{geometry: THREE.BufferGeometry, tris: number, key: string, center: number[]|null}[] | null}
  */
 export function chunkGeometry(geo, o = {}) {
   if (!geo || !geo.attributes.position || (geo.groups && geo.groups.length > 1)) return null;
@@ -79,6 +83,7 @@ export function chunkGeometry(geo, o = {}) {
   const out = [];
   let maxT = 0; for (let j = 0; j < keys.length; j++) maxT = Math.max(maxT, start[j + 1] - start[j]);
   const src = new Int32Array(maxT * 3); // tile vertex -> source vertex
+  const local = !!o.localOrigin;
   for (let j = 0; j < keys.length; j++) {
     const t0 = start[j], t1 = start[j + 1];
     // vertex remap for this tile
@@ -92,11 +97,19 @@ export function chunkGeometry(geo, o = {}) {
         idx[w++] = remap[v];
       }
     }
+    // tile origin: the XZ centre of its vertex bounds (y stays world: object-space heights are unchanged)
+    let cx = 0, cz = 0;
+    if (local) {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let v = 0; v < nv; v++) { const s0 = src[v] * 3, x = P[s0], z = P[s0 + 2]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+      cx = (x0 + x1) * 0.5; cz = (z0 + z1) * 0.5;
+    }
     const g = new THREE.BufferGeometry();
     for (const name of names) {
       const A = geo.attributes[name], sz = A.itemSize, arr = A.array;
       const dst = new arr.constructor(nv * sz);
-      if (sz === 3) for (let v = 0; v < nv; v++) { const s0 = src[v] * 3, d0 = v * 3; dst[d0] = arr[s0]; dst[d0 + 1] = arr[s0 + 1]; dst[d0 + 2] = arr[s0 + 2]; }
+      if (local && name === 'position' && sz === 3) for (let v = 0; v < nv; v++) { const s0 = src[v] * 3, d0 = v * 3; dst[d0] = arr[s0] - cx; dst[d0 + 1] = arr[s0 + 1]; dst[d0 + 2] = arr[s0 + 2] - cz; }
+      else if (sz === 3) for (let v = 0; v < nv; v++) { const s0 = src[v] * 3, d0 = v * 3; dst[d0] = arr[s0]; dst[d0 + 1] = arr[s0 + 1]; dst[d0 + 2] = arr[s0 + 2]; }
       else if (sz === 2) for (let v = 0; v < nv; v++) { const s0 = src[v] * 2, d0 = v * 2; dst[d0] = arr[s0]; dst[d0 + 1] = arr[s0 + 1]; }
       else if (sz === 1) for (let v = 0; v < nv; v++) dst[v] = arr[src[v]];
       else for (let v = 0; v < nv; v++) { const s0 = src[v] * sz, d0 = v * sz; for (let c = 0; c < sz; c++) dst[d0 + c] = arr[s0 + c]; }
@@ -108,13 +121,14 @@ export function chunkGeometry(geo, o = {}) {
     g.computeBoundingBox(); g.computeBoundingSphere();
     const { triClass, ...ud } = geo.userData || {}; void triClass;
     g.userData = ud;
+    if (local) g.userData.localOrigin = [cx, 0, cz];
     if (cls) { // first index of each class in this tile
       const cs = new Array(nCls + 1).fill(0);
       for (let q = t0; q < t1; q++) cs[cls[order[q]] + 1] += 3;
       for (let c = 1; c <= nCls; c++) cs[c] += cs[c - 1];
       g.userData.classStarts = cs;
     }
-    out.push({ geometry: g, tris: t1 - t0, key: keys[j] === REST ? 'rest' : String(keys[j]) });
+    out.push({ geometry: g, tris: t1 - t0, key: keys[j] === REST ? 'rest' : String(keys[j]), center: local ? [cx, 0, cz] : null });
   }
   return out;
 }
@@ -122,13 +136,16 @@ export function chunkGeometry(geo, o = {}) {
 /**
  * Tile a static mesh. Returns a Group (named like the mesh) of tile meshes sharing the mesh's material(s),
  * custom depth / distance materials, shadow flags, render order, layers, matrix and userData; or the mesh itself
- * when it cannot be split (or would yield a single tile).
+ * when it cannot be split (or would yield a single tile). Each tile mesh sits at its own XZ centre with local
+ * vertices (chunkGeometry localOrigin, default on here: the world result is identical and the renderer's
+ * front-to-back sort of opaque objects then orders the tiles by distance); localOrigin: false keeps world-space
+ * tiles at the group origin.
  * @param {THREE.Mesh} mesh
  * @param {object} [o] chunkGeometry options + dispose (default true: dispose the source geometry)
  */
 export function chunkMesh(mesh, o = {}) {
   if (!mesh || !mesh.isMesh || mesh.isInstancedMesh || mesh.isBatchedMesh || mesh.isSkinnedMesh) return mesh;
-  const tiles = chunkGeometry(mesh.geometry, o);
+  const tiles = chunkGeometry(mesh.geometry, { localOrigin: true, ...o });
   if (!tiles || tiles.length < 2) return mesh;
   const g = new THREE.Group();
   g.name = mesh.name;
@@ -144,11 +161,41 @@ export function chunkMesh(mesh, o = {}) {
     m.onBeforeRender = mesh.onBeforeRender; m.onAfterRender = mesh.onAfterRender;
     m.onBeforeShadow = mesh.onBeforeShadow; m.onAfterShadow = mesh.onAfterShadow;
     m.userData = mesh.userData;
+    if (t.center) m.position.set(t.center[0], t.center[1], t.center[2]);
     m.matrixAutoUpdate = false; m.updateMatrix();
     g.add(m);
   }
   if (o.dispose !== false) mesh.geometry.dispose();
   return g;
+}
+
+/**
+ * Move a static mesh's origin to the XZ centre of its geometry: vertices become local, the mesh's position takes
+ * the centre, world positions are unchanged (float32 rounding apart). three.js sorts opaque objects front to back
+ * by object position, so merged chunks that all sat at the world origin (identical sort keys, drawn in creation
+ * order) are then drawn near to far: on immediate-mode GPUs that means less overdraw of expensive shaders and
+ * earlier depth rejects (tile-based GPUs such as Apple's already shade each opaque pixel once). Plain (non-instanced)
+ * meshes with a position attribute only; a mesh already localised (geometry.userData.localOrigin) is left alone.
+ * Anything that later edits the geometry by world coordinates must subtract mesh.position. Returns the mesh.
+ */
+export function localizeMeshOrigin(mesh) {
+  const g = mesh && mesh.geometry;
+  if (!mesh || !mesh.isMesh || mesh.isInstancedMesh || !g || g.isInstancedBufferGeometry || !g.attributes.position || (g.userData && g.userData.localOrigin)) return mesh;
+  if (!g.boundingBox) g.computeBoundingBox();
+  const bb = g.boundingBox;
+  if (!Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) return mesh;
+  const cx = (bb.min.x + bb.max.x) * 0.5, cz = (bb.min.z + bb.max.z) * 0.5;
+  if (!g.userData) g.userData = {};
+  if (cx === 0 && cz === 0) { g.userData.localOrigin = [0, 0, 0]; return mesh; }
+  const P = g.attributes.position.array;
+  for (let i = 0; i < P.length; i += 3) { P[i] -= cx; P[i + 2] -= cz; }
+  g.attributes.position.needsUpdate = true;
+  bb.min.x -= cx; bb.max.x -= cx; bb.min.z -= cz; bb.max.z -= cz;
+  if (g.boundingSphere) { g.boundingSphere.center.x -= cx; g.boundingSphere.center.z -= cz; } else g.computeBoundingSphere();
+  g.userData.localOrigin = [cx, 0, cz];
+  mesh.position.x += cx; mesh.position.z += cz;
+  mesh.updateMatrix();
+  return mesh;
 }
 
 /** chunkMesh() + swap the result into the mesh's parent at the same position in the child list. */

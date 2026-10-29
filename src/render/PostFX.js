@@ -3,17 +3,20 @@
 //   ExposurePass-> 64x64 log-luminance pyramid -> adapted 1x1 luminance (eye adaptation, GPU only)
 //   AOPass      -> GTAO from that depth at half resolution + bilateral blur (no second scene render)
 //   BloomPass   -> UnrealBloom at quarter resolution with an HDR soft-knee bright pass (not blended here)
-//   FinalPass   -> one full-resolution shader: AO, height/distance fog with sky-coloured inscatter,
-//                  bloom add, exposure + ACES filmic (same curve as OutputPass), colour grading (contrast,
-//                  saturation, split toning), vignette, edge chromatic aberration, night grain, dither, sRGB.
-//                  Writes the scene depth to the default framebuffer so the lens flare can occlude.
+//   FinalPass   -> one full-resolution shader: AO (bilinear or depth-aware upsample), height/distance fog with
+//                  sky-coloured inscatter, bloom add, exposure + ACES filmic (same curve as OutputPass), colour
+//                  grading (contrast, saturation, split toning), vignette, edge chromatic aberration, night grain,
+//                  dither, sRGB. Writes the scene depth to the default framebuffer so the lens flare can occlude.
 // Then the Atmosphere's lens-flare overlay. Anti-aliasing: 4x MSAA on the scene target by day (alpha-to-coverage
-// foliage, thin bridge cables), FXAA inside the final pass once it is dark (see _applyAA).
-// API: render(dt), setSize(w, h, pixelRatio), setTimeOfDay(darkness), setEnabled(bool), setMSAA(mode), debug, dispose().
+// foliage, thin bridge cables), FXAA inside the final pass once it is dark or the drawing buffer is larger than
+// msaaMaxPixels (see _applyAA).
+// API: render(dt), setSize(w, h, pixelRatio), setTimeOfDay(darkness), setEnabled(bool), setMSAA(mode, maxPixels),
+// setAOResolution({ scale, maxPixels, upsample }), debug, dispose().
 // Options (defaults are the Roadster tunings): atmosphere, width/height/pixelRatio, samples, msaa ('auto' | n),
-// compactHDR, grade (keyframes by sun elevation, see DEFAULT_GRADE), ao { radius, thickness, samples,
-// resolutionScale, fadeNear, fadeFar }, bloom { strength, radius, threshold, resolutionScale }, fog (bool),
-// fogFarFade (fraction of camera.far where the far fade starts), fogMinSkyElevation, autoExposure.
+// msaaMaxPixels, lateClear, compactHDR, grade (keyframes by sun elevation, see DEFAULT_GRADE), ao { radius,
+// thickness, samples, resolutionScale, maxPixels, upsample, compact, fadeNear, fadeFar } (see AOPass), bloom
+// { strength, radius, threshold, resolutionScale }, fog (bool), fogFarFade (fraction of camera.far where the far
+// fade starts), fogMinSkyElevation, autoExposure.
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -45,16 +48,24 @@ const FinalShader = {
     uDebug: { value: 0 }, // 1 AO, 2 bloom, 3 fog transmittance
     uFXAA: { value: 0 },
   },
+  // The eye-adaptation multiplier is one value for the whole screen: evaluated per vertex of the full-screen triangle
+  // and passed flat (same value), instead of a texture read + exp2 + pow in each of ~6 M pixels at Retina size.
   vertexShader: /* glsl */`
+    uniform sampler2D tAdapt;
+    uniform vec4 uAE;
     varying vec2 vUv;
-    void main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
+    flat varying float vAE;
+    void main() {
+      vUv = uv;
+      vAE = clamp( pow( uAE.x / exp2( textureLod( tAdapt, vec2( 0.5 ), 0.0 ).r ), uAE.y ), uAE.z, uAE.w );
+      gl_Position = vec4( position.xy, 0.0, 1.0 );
+    }`,
   fragmentShader: /* glsl */`
     uniform sampler2D tColor;
     uniform highp sampler2D tDepth;
     uniform sampler2D tAO;
     uniform sampler2D tBloom;
     uniform samplerCube tSky;
-    uniform sampler2D tAdapt;
     uniform vec4 uAE;
     uniform float uHasAO, uHasBloom, uHasFog;
     uniform mat4 uProjInv, uCamWorld;
@@ -69,6 +80,7 @@ const FinalShader = {
     uniform int uDebug;
     uniform float uFXAA;
     varying vec2 vUv;
+    flat varying float vAE;
 
     // ACES filmic, identical to three's ACESFilmicToneMapping / OutputPass
     vec3 RRTAndODTFit( vec3 v ) {
@@ -109,6 +121,29 @@ const FinalShader = {
     }
     float hash12( vec2 p ) { vec3 p3 = fract( vec3( p.xyx ) * 0.1031 ); p3 += dot( p3, p3.yzx + 33.33 ); return fract( ( p3.x + p3.y ) * p3.z ); }
 
+    // AO at this pixel. AO_UPSAMPLE_DEPTH (ao.upsample 'depth'): joint bilateral upsample instead of the bilinear tap,
+    // the four AO texels around the pixel weighted bilinearly and by how close their linear depth (g) is to the
+    // pixel's own (the AO blur's tolerance), so AO computed at a lower resolution keeps crisp silhouettes: no dark
+    // halo on the background behind an object, no light rim along its edge. Texels of another surface keep a 1e-3
+    // weight, so a pixel that matches none of them (a pole thinner than an AO texel) gets the plain bilinear value.
+    float aoAt( float depth ) {
+    #ifdef AO_UPSAMPLE_DEPTH
+      float z = uNear * uFar / ( uFar - ( uFar - uNear ) * depth ); // linear view depth (m), the g channel's units
+      ivec2 mx = textureSize( tAO, 0 ) - 1;
+      vec2 p = vUv * vec2( mx + 1 ) - 0.5, f = fract( p );
+      ivec2 i = ivec2( floor( p ) );
+      vec2 a = texelFetch( tAO, clamp( i, ivec2( 0 ), mx ), 0 ).rg;
+      vec2 b = texelFetch( tAO, clamp( i + ivec2( 1, 0 ), ivec2( 0 ), mx ), 0 ).rg;
+      vec2 c = texelFetch( tAO, clamp( i + ivec2( 0, 1 ), ivec2( 0 ), mx ), 0 ).rg;
+      vec2 d = texelFetch( tAO, clamp( i + 1, ivec2( 0 ), mx ), 0 ).rg;
+      vec4 w = vec4( ( 1.0 - f.x ) * ( 1.0 - f.y ), f.x * ( 1.0 - f.y ), ( 1.0 - f.x ) * f.y, f.x * f.y )
+             * max( vec4( 1e-3 ), 1.0 - abs( vec4( a.y, b.y, c.y, d.y ) - z ) / ( 0.06 * z + 0.15 ) );
+      return dot( w, vec4( a.x, b.x, c.x, d.x ) ) / dot( w, vec4( 1.0 ) );
+    #else
+      return texture2D( tAO, vUv ).r;
+    #endif
+    }
+
     // optical depth through an exponential layer (density d at height 0, falloff k) from y0 to y1 over dist
     float layer( float y0, float y1, float dist, float d, float k ) {
       float x = k * ( y1 - y0 );
@@ -123,11 +158,12 @@ const FinalShader = {
       float dbgT = 1.0;
       vec3 col;
       if ( uFXAA > 0.5 ) col = fxaa( vUv );
-      else col = vec3( texture2D( tColor, vUv - ca ).r, texture2D( tColor, vUv ).g, texture2D( tColor, vUv + ca ).b );
+      else if ( uCA != 0.0 ) col = vec3( texture2D( tColor, vUv - ca ).r, texture2D( tColor, vUv ).g, texture2D( tColor, vUv + ca ).b );
+      else col = texture2D( tColor, vUv ).rgb; // uCA 0: the one texel all three taps would read
 
       if ( depth < 1.0 ) {
         if ( uHasAO > 0.5 ) {
-          float ao = texture2D( tAO, vUv ).r;
+          float ao = aoAt( depth );
           float lum = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
           ao = mix( ao, 1.0, smoothstep( 2.0, 10.0, lum ) ); // emissives / hot highlights keep their energy
           col *= mix( 1.0, ao, uAO );
@@ -144,13 +180,13 @@ const FinalShader = {
           float T = exp( -tau ) * ( 1.0 - smoothstep( uFogA.w * uFar, 0.985 * uFar, dist ) );
           vec3 fd = normalize( vec3( dir.x, max( dir.y, uFogB.w ), dir.z ) );
           vec3 fogCol = textureCube( tSky, fd ).rgb;
-          fogCol += uSunCol * uSunScatter * pow( max( dot( dir, uSunDir ), 0.0 ), 10.0 );
+          if ( uSunScatter != 0.0 ) fogCol += uSunCol * uSunScatter * pow( max( dot( dir, uSunDir ), 0.0 ), 10.0 ); // 0 at night, high sun
           col = col * T + fogCol * ( 1.0 - T );
           dbgT = T;
         }
       }
       if ( uHasBloom > 0.5 ) col += texture2D( tBloom, vUv ).rgb;
-      if ( uAE.y > 0.0 ) col *= clamp( pow( uAE.x / exp2( texture2D( tAdapt, vec2( 0.5 ) ).r ), uAE.y ), uAE.z, uAE.w );
+      if ( uAE.y > 0.0 ) col *= vAE;
 
       col = acesFilmic( col * uWB );
       // grading in display-linear space
@@ -166,7 +202,7 @@ const FinalShader = {
       if ( uGrain > 0.0 ) o += ( hash12( vUv * uRes + fract( uTime * 7.31 ) * 913.0 ) - 0.5 ) * uGrain * ( 1.0 - 0.6 * l ); // film grain in display space
       o += ( hash12( vUv * uRes + 17.0 ) - 0.5 ) / 255.0; // dither: no banding in the sky gradients
       gl_FragColor = vec4( o, 1.0 );
-      if ( uDebug == 1 ) gl_FragColor = vec4( vec3( texture2D( tAO, vUv ).r ), 1.0 );
+      if ( uDebug == 1 ) gl_FragColor = vec4( vec3( aoAt( depth ) ), 1.0 );
       else if ( uDebug == 2 ) gl_FragColor = vec4( toSRGB( clamp( texture2D( tBloom, vUv ).rgb, 0.0, 1.0 ) ), 1.0 );
       else if ( uDebug == 3 ) gl_FragColor = vec4( vec3( dbgT ), 1.0 );
       gl_FragDepth = depth; // the lens-flare overlay depth-tests against the scene
@@ -187,10 +223,17 @@ class FinalPass extends Pass {
       toneMapped: false,
     });
     this._quad = new FullScreenQuad(this.material);
+    this._aoUp = false; // AO_UPSAMPLE_DEPTH defined (aoPass.upsample === 'depth')
   }
   setSize(w, h) { this.material.uniforms.uRes.value.set(w, h); }
   render(renderer, writeBuffer, readBuffer) {
     const u = this.material.uniforms, fx = this.fx;
+    const up = fx.aoPass.upsample === 'depth';
+    if (up !== this._aoUp) { // a define, not a branch: nothing extra in 'linear' mode; one cached program per mode
+      this._aoUp = up;
+      if (up) this.material.defines.AO_UPSAMPLE_DEPTH = 1; else delete this.material.defines.AO_UPSAMPLE_DEPTH;
+      this.material.needsUpdate = true;
+    }
     u.tColor.value = readBuffer.texture;
     u.tDepth.value = readBuffer.depthTexture;
     u.uHasAO.value = fx.aoPass.enabled ? 1 : 0;
@@ -206,6 +249,26 @@ class FinalPass extends Pass {
     this._quad.render(renderer);
   }
   dispose() { this.material.dispose(); this._quad.dispose(); }
+}
+
+// The scene pass. With fx.lateClear, renderer.render() clears the target itself (autoClear, in WebGLBackground.render,
+// which runs after shadowMap.render) instead of RenderPass clearing it before render(). On ANGLE / Metal a clear opens
+// the bound target's render pass at once (FrameBufferMtl clearWithLoadOpRenderPassNotStarted: load action clear,
+// store), so the shadow-map passes drawn next close that pass with nothing but the clear in it: the cleared
+// (multisampled) colour + depth are written to memory, then loaded back for the scene draws, a full-screen store +
+// load every frame (MSAA and FXAA targets alike) that the late clear does not do. Same clear values (renderer clear
+// colour, autoClearColor / Depth / Stencil); with any RenderPass option set it falls back to RenderPass.
+class ScenePass extends RenderPass {
+  constructor(scene, camera, fx) { super(scene, camera); this.fx = fx; }
+  render(renderer, writeBuffer, readBuffer, deltaTime, maskActive) {
+    const plain = this.clear && !this.clearDepth && this.overrideMaterial === null && this.clearColor === null && this.clearAlpha === null;
+    if (!this.fx.lateClear || !plain) { super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive); return; }
+    const ac = renderer.autoClear;
+    renderer.autoClear = true;
+    renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
+    renderer.render(this.scene, this.camera);
+    renderer.autoClear = ac;
+  }
 }
 
 // grading / exposure / bloom keyframes by sun elevation (degrees)
@@ -235,7 +298,8 @@ export class PostFX {
    * @param {THREE.Scene} scene
    * @param {THREE.PerspectiveCamera} camera
    * @param {object} [o] atmosphere (an Atmosphere), width/height (CSS px), pixelRatio, samples (MSAA, default 4),
-   *   msaa, compactHDR, grade, ao, bloom, fog, fogFarFade, fogMinSkyElevation, autoExposure (see header)
+   *   msaa, msaaMaxPixels, lateClear, compactHDR, grade, ao, bloom, fog, fogFarFade, fogMinSkyElevation,
+   *   autoExposure (see header)
    */
   constructor(renderer, scene, camera, o = {}) {
     this.renderer = renderer; this.scene = scene; this.camera = camera;
@@ -254,9 +318,16 @@ export class PostFX {
     // 'auto': 4x MSAA while the scene is cheap to shade (day), FXAA in the final pass once it is dark (the night
     // scene's 16 street-lamp point lights make every MSAA edge fragment expensive: ~11 ms vs ~0.3 ms for FXAA)
     this.msaa = o.msaa ?? 'auto';
+    // ... and FXAA whenever the drawing buffer has more than msaaMaxPixels pixels (default Infinity: no limit). At
+    // Retina density aliasing is far less visible, and the 4x path's cost is mostly the resolve (colour + depth blit,
+    // see ScenePass), not sample shading: Canyon Run at 3024x1964, 4x -> FXAA saves 2.7 ms, 4x -> 2x only 0.4 ms
+    this.msaaMaxPixels = o.msaaMaxPixels ?? Infinity;
+    // clear the scene target after the shadow maps (see ScenePass): identical output, ~1 ms at 3024x1964 on Apple GPUs
+    this.lateClear = o.lateClear ?? true;
     const samples = this.maxSamples;
 
     const W = Math.max(1, Math.floor(this.width * this.pixelRatio)), H = Math.max(1, Math.floor(this.height * this.pixelRatio));
+    this._W = W; this._H = H; // drawing-buffer size, for msaaMaxPixels
     const depthTexture = new THREE.DepthTexture(W, H, THREE.UnsignedIntType);
     // R11G11B10 float halves the MSAA bandwidth of RGBA16F (~1 ms at 1500x1300 on an M4); needs EXT_color_buffer_float
     const small = o.compactHDR !== false && renderer.extensions.has('EXT_color_buffer_float');
@@ -266,9 +337,12 @@ export class PostFX {
     rt.texture.generateMipmaps = false;
     this.composer = new EffectComposer(renderer, rt);
 
-    this.renderPass = new RenderPass(scene, camera);
+    this.renderPass = new ScenePass(scene, camera, this);
     this.exposurePass = new ExposurePass();
-    this.aoPass = new AOPass(camera, { radius: 1.8, thickness: 1.6, samples: 12, resolutionScale: 0.5, ...(o.ao || {}) });
+    // AO defaults: half resolution capped at 0.6 Mpx (a 14-inch Retina MacBook's half-res buffer is 1.5 Mpx: -1.3 to
+    // -1.7 ms measured at 3024x1964, full-res mean pixel change <= 0.04 / 255 and < 0.5 % of pixels over 2 / 255 with
+    // the depth-aware upsample; 1080p-class buffers are under the cap and unchanged), compact RG16F buffers
+    this.aoPass = new AOPass(camera, { radius: 1.8, thickness: 1.6, samples: 12, resolutionScale: 0.5, maxPixels: 0.6e6, upsample: 'depth', compact: true, ...(o.ao || {}) });
     this.bloomPass = new BloomPass({ strength: 0.3, radius: 0.45, threshold: 2.8, resolutionScale: 0.5, ...(o.bloom || {}) });
     this.finalPass = new FinalPass(this);
     for (const p of [this.renderPass, this.exposurePass, this.aoPass, this.bloomPass, this.finalPass]) this.composer.addPass(p);
@@ -297,7 +371,9 @@ export class PostFX {
   setSize(w, h, pixelRatio = this.pixelRatio) {
     this.width = w; this.height = h; this.pixelRatio = pixelRatio;
     const W = Math.max(1, Math.floor(w * pixelRatio)), H = Math.max(1, Math.floor(h * pixelRatio));
+    this._W = W; this._H = H;
     this.composer.setSize(W, H);
+    this._applyAA(this._aaDark); // msaaMaxPixels: the new size may change 'auto' (a no-op while it is Infinity)
     if (this.atmo && this.atmo.setFlareScale) this.atmo.setFlareScale(H);
   }
 
@@ -330,15 +406,37 @@ export class PostFX {
   }
 
   _applyAA(darkness = this.atmo ? this.atmo.darkness : 0) {
-    const want = this.msaa === 'auto' ? (darkness > 0.35 ? 0 : this.maxSamples) : Math.min(this.maxSamples, this.msaa | 0);
+    this._aaDark = darkness; // setSize re-applies the size rule with the same darkness
+    const want = this.msaa === 'auto'
+      ? (darkness > 0.35 || this._W * this._H > this.msaaMaxPixels ? 0 : this.maxSamples)
+      : Math.min(this.maxSamples, this.msaa | 0);
     for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
       if (rt.samples !== want) { rt.samples = want; rt.dispose(); }
     }
     this.uniforms.uFXAA.value = want > 0 ? 0 : 1;
   }
 
-  /** Anti-aliasing: 'auto' (default), or a fixed MSAA sample count (0 = FXAA only). */
-  setMSAA(mode) { this.msaa = mode; this._applyAA(); }
+  /**
+   * Anti-aliasing: 'auto' (default), or a fixed MSAA sample count (0 = FXAA only). maxPixels (optional) replaces
+   * msaaMaxPixels, the drawing-buffer pixel count above which 'auto' uses FXAA (Infinity / null: no limit).
+   */
+  setMSAA(mode, maxPixels) {
+    this.msaa = mode;
+    if (maxPixels !== undefined) this.msaaMaxPixels = maxPixels ?? Infinity;
+    this._applyAA();
+  }
+
+  /**
+   * AO buffer size and upsampling at runtime (console A/B); the AO targets resize at once and omitted fields keep
+   * their value. scale: of the drawing buffer; maxPixels: pixel budget of the AO buffers (Infinity / null: none);
+   * upsample: 'linear' (bilinear tap) | 'depth' (depth-aware, aoAt in the final pass). Returns the AO buffer size.
+   */
+  setAOResolution({ scale, maxPixels, upsample } = {}) {
+    const ao = this.aoPass;
+    if (upsample !== undefined) ao.upsample = upsample;
+    ao.setResolution(scale ?? ao.scale, maxPixels === undefined ? ao.maxPixels : maxPixels);
+    return { width: ao.rtA.width, height: ao.rtA.height };
+  }
 
   _syncFrame(dt) {
     const a = this.atmo, u = this.uniforms, cam = this.camera;
