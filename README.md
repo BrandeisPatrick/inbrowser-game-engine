@@ -2,22 +2,24 @@
 
 Reusable browser game engine on Three.js / WebGL2, extracted from the Roadster flying-car game
 ([roadster](https://github.com/BrandeisPatrick/roadster), which embeds this repository as its `engine/`
-submodule). Design notes, measurements and the record of decisions: [ENGINE.md](ENGINE.md). Layers: core, render,
-physics, world, input, camera, audio, ui. Published as the npm package `@vibe/engine` (MIT); games import it as a
-normal package:
+submodule). Design notes, measurements and the record of decisions: [ENGINE.md](ENGINE.md). Layers: core, physics,
+render, anim, input, camera, audio, ui, world. Published as the npm package `@vibe/engine` (MIT); games import it as
+a normal package:
 
 ```js
 import { Engine, PhysicsWorld, VehicleController, Atmosphere, PostFX } from '@vibe/engine';
-import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, physics, render, input, camera, audio, ui, world
+import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, physics, render, anim, input, camera, audio, ui, world
 ```
 
 ## Install
 - As a git submodule of a game (what roadster does): `git submodule add https://github.com/BrandeisPatrick/inbrowser-game-engine.git engine`,
   list `engine` in the game's `workspaces`, and `npm install` links `node_modules/@vibe/engine -> engine`.
 - From git: `npm install github:BrandeisPatrick/inbrowser-game-engine` (pure ES module source, no build step).
-- Standalone: `npm install`, then `npm run dev` serves the Canyon Run sample at http://localhost:5190 (MacBook knobs:
-  `?fps=60` tick cap, `?shadows=pcf`, `?msaamax=`, `?procworkers=0`; see ENGINE.md "MacBook pass"), `npm test`
-  runs the headless vehicle physics checks (Node >= 20), `npm run build` builds the sample into `dist/`.
+- Standalone: `npm install`, then `npm run dev` serves the samples at http://localhost:5190 (Canyon Run at
+  `/canyon-run/`; MacBook knobs: `?fps=60` tick cap, `?shadows=pcf`, `?msaamax=`, `?procworkers=0`; see ENGINE.md
+  "MacBook pass"), `npm test` runs every headless suite (`test/all.mjs`, Node >= 20), `npm run build` builds the
+  samples into `dist/`, `npm run types` emits `types/` from the JSDoc, `npm run smoke` / `npm run bench` drive the
+  samples in Chrome (Playwright; see ENGINE.md "Measurement protocol").
 - Peer dependency: `three >= 0.170`. `npm run pack:check` lists the tarball (~100 files, ~440 kB) for
   `npm publish --access public` once a registry scope exists.
 
@@ -25,15 +27,24 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
 - `samples/canyon-run/` — off-road buggy time trial built only on the engine; it drove 15 engine fixes
   (ENGINE.md, "Changelog / sample findings"). Without Poly Haven texture sets under its public dir it falls back to
   procedural textures.
-- `test/car-sim.mjs` — 73 headless checks of the Roadster vehicle model and the PhysicsWorld queries (`npm test`).
+- `test/car-sim.mjs` — 90 headless checks of the Roadster vehicle model and the PhysicsWorld queries (`npm test`).
   The street-drive and traffic checks that need the San Francisco map live in the game repository (`dev/`).
-- `samples/city/` — dev-only harness: the procedural city in the browser at http://localhost:5190/city (free-fly
+- `samples/city/` — dev-only harness: the procedural city in the browser at http://localhost:5190/city/ (free-fly
   camera, post stack, F3 profiler), for seeing and measuring the world layer without map data.
+- `samples/character/` — third-person character playground: a glTF character (`node tools/fetch-models.mjs`
+  downloads the CC0 RobotExpressive model; `?model=` loads any other) or a procedural rigged fallback, driven by
+  `CharacterController`, `AnimationController`, `ThirdPersonRig` / `FirstPersonRig` and `CharacterInput`.
+- `test/core.mjs`, `test/assets.mjs`, `test/anim.mjs`, `test/rigs.mjs`, `test/character-sim.mjs` — headless checks
+  of the 0.5.0 core services, loaders, animation layer, character rigs and the kinematic character controller.
 - `test/world-build.mjs` — builds the procedural city headless (`MapWorld` with `renderer: null`, no DOM: the canvas
   painters run against `test/helpers/dom-shim.mjs`) and pins its stats, physics queries and 10 s of deterministic
   traffic (`npm test` runs it after car-sim; ~2 s).
 
 ## Layers
+- `src/core/` — `Engine` (fixed-step loop, systems, adaptive resolution, `clock`), `Profiler`, `Assets`, `Events`,
+  `Clock`, `Entity` / `EntitySystem`, deterministic math (`MathDet`), the bench harness (`createBenchHarness`).
+- `src/anim/` — `AnimationController` (states, blend trees, transitions, root motion over `AnimationMixer`),
+  `TwoBoneIK`, CCD IK helpers.
 - `src/world/` — data-driven city worlds: `MapWorld` (map + terrain + options + plugins) and its systems: `Terrain`,
   `MapData`, `RoadNetwork`, `Buildings` + `FacadeTextures`, `Props` + `Furniture` + `Vehicles`, `Traffic`,
   `Vegetation` (+ `Veg*`), `Water`, `Shore`, `Boats`, plus `MeshChunker`, `ShadowPasses`, `NearestLights`. API, plugin

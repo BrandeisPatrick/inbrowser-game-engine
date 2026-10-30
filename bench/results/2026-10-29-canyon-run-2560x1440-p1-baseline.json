@@ -1,0 +1,85 @@
+{
+  "page": "canyon-run",
+  "label": "p1-baseline",
+  "date": "2026-10-29T12:49:48.771Z",
+  "url": "http://127.0.0.1:5199/canyon-run/?bench=1&size=2560x1440",
+  "chrome": "155.0.8059.86",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 1400,
+  "poses": [
+    "straight",
+    "chase",
+    "aerial",
+    "ahead"
+  ],
+  "settings": [],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "straight",
+      "ms": 8.433,
+      "fps": 118.58,
+      "hash": "8418fe3a",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 53,
+      "triangles": 554436
+    },
+    {
+      "setting": "current",
+      "pose": "chase",
+      "ms": 8.454,
+      "fps": 118.28,
+      "hash": "b115802a",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 60,
+      "triangles": 754756
+    },
+    {
+      "setting": "current",
+      "pose": "aerial",
+      "ms": 9.758,
+      "fps": 102.48,
+      "hash": "8b015c85",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 55,
+      "triangles": 776814
+    },
+    {
+      "setting": "current",
+      "pose": "ahead",
+      "ms": 5.933,
+      "fps": 168.54,
+      "hash": "2996174b",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 44,
+      "triangles": 593270
+    }
+  ]
+}

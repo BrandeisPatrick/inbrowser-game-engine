@@ -18,6 +18,8 @@ export {
   makeCanvas, paintCanvas, finishTexture, makeDataArrayTexture, freeAfterUpload,
 } from './TextureSets.js';
 export { buildMipChain, dataTextureFromMips, fillTransparent, dilateRGB } from './MipChain.js';
+// asset loaders for the core Assets registry (glTF + KTX2 / Draco / meshopt, textures, HDR, .cube LUTs)
+export { registerRenderLoaders, parseCubeLUT, disposeInstance } from './loaders.js';
 export { DEFAULT_RINGS, impostorViews, bakeImpostors, createImpostorMaterial, ImpostorBatch } from './Impostors.js';
 export { createTimeUniforms, updateTimeUniforms, windSway, ditherFade, applyPatches, makeDepthMaterial, GLSL_IGN, GLSL_HASH } from './MaterialPatches.js';
 export { InstancedPool } from './InstancedPool.js';

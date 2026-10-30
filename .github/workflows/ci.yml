@@ -1,0 +1,31 @@
+# Node checks on every push to main and every pull request: unit / headless world tests, the samples build and the
+# JSDoc -> .d.ts type emit. No browser job: headless Chromium on a GPU-less runner is SwiftShader, so GPU numbers
+# come from the local headed run (npm run bench) and the browser smoke test runs locally (npm run smoke).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run types

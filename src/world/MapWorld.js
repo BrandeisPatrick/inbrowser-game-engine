@@ -315,6 +315,7 @@ export class MapWorld {
   }
 
   // ================================================================== plugins
+  /** @returns {object} */
   _pluginCtx() {
     return { world: this, data: this.data, net: this.net, colliders: this.colliders, mat: this.mat, tex: this.tex, groundAt: (x, z) => this._groundAt(x, z), renderer: this.renderer, offset: this.offset };
   }

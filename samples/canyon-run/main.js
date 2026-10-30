@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import {
   Engine, PhysicsWorld, Atmosphere, DEFAULT_LOOKS, PostFX, DEFAULT_GRADE, ChaseRig, OrbitRig, FreeFlyRig,
   VehicleInput, PAD_BUTTONS as B, PAD_AXES as AX, inputRamp, LoadingScreen, makeTextureArray, createTimeUniforms,
-  updateTimeUniforms, ChunkCuller,
+  updateTimeUniforms, ChunkCuller, createBenchHarness, readBenchParams,
 } from '@vibe/engine';
 import { Track, TRACK_HALF_WIDTH } from './track.js';
 import { Terrain, createTerrainMaterial, WORLD_HALF } from './terrain.js';
@@ -290,8 +290,41 @@ async function boot() {
   renderer.compile(scene, camera);
   W.timings.compile = Math.round(performance.now() - tc);
   const loadMs = Math.round(performance.now() - t0);
-  window.__canyon = { timings: W.timings, THREE, engine, physics, atmo, postfx, track, terrain, course, props, buggy, devils, race, hud, audio, input, rigs, culler, startRun, toMenu, resetToCheckpoint, loadMs };
+  window.__canyon = { timings: W.timings, THREE, engine, physics, atmo, postfx, U, track, terrain, course, props, buggy, devils, race, hud, audio, input, rigs, culler, startRun, toMenu, resetToCheckpoint, loadMs };
   console.info(`[canyon-run] ready in ${loadMs} ms · track ${(track.length / 1000).toFixed(2)} km, ${track.checkpoints.length} gates, terrain ${terrain.ms.toFixed(0)} ms, props`, props.stats, `textures ${W.arrays.loaded}/${W.arrays.wanted}`, W.timings);
+  // measurement harness (window.__sample; `?bench=1&size=WxH` pins the drawing buffer): fixed poses relative to the
+  // buggy, with every time-dependent input pinned so captures reproduce across page loads (ENGINE.md "Measurement
+  // protocol"): clouds are wall-clock driven, wind sway and dither fades read the time uniforms.
+  const _f = new THREE.Vector3(), _bp = () => buggy.object3d.position, _bf = () => _f.set(0, 0, -1).applyQuaternion(buggy.object3d.quaternion);
+  const sample = createBenchHarness(engine, {
+    name: 'canyon-run',
+    poses: {
+      straight: (cam) => { const p = _bp(), f = _bf(); cam.position.set(p.x - f.x * 30, p.y + 1.6, p.z - f.z * 30); cam.up.set(0, 1, 0); cam.lookAt(p.x + f.x * 120, p.y + 1, p.z + f.z * 120); },
+      chase: (cam) => { const p = _bp(); cam.position.set(p.x, p.y + 4, p.z + 14); cam.up.set(0, 1, 0); cam.lookAt(p.x, p.y + 1, p.z); },
+      aerial: (cam) => { const p = _bp(); cam.position.set(p.x, p.y + 120, p.z + 60); cam.up.set(0, 1, 0); cam.lookAt(p.x, p.y, p.z - 200); },
+      ahead: (cam) => { const p = _bp(), f = _bf(); cam.position.set(p.x + f.x * 60, p.y + 1.6, p.z + f.z * 60); cam.up.set(0, 1, 0); cam.lookAt(p.x + f.x * 300, p.y + 1, p.z + f.z * 300); },
+    },
+    after: (cam) => {
+      culler.update(cam); props.update(cam.position, 0.016); atmo.update(cam.position, 0);
+      const su = atmo.sky.material.uniforms; su.uTime.value = 0; su.uCloudOffset.value.set(0.13, 0.41);
+      U.uTime.value = 0; U.uViewPos.value.copy(cam.position);
+    },
+    quiet: () => {
+      for (const k in rigs) rigs[k].deactivate();
+      devils.ps.clear(); devils.timer = 1e9; for (const d of devils.devils) d.on = false; buggy.dust.clear();
+      if (postfx) { postfx.autoExposure = false; postfx.setTimeOfDay(atmo.darkness); }
+    },
+    settings: {
+      'postfx.enabled': (v) => { if (postfx) postfx.setEnabled(!!v); },
+      'postfx.aa': (v) => { if (postfx) postfx.setMSAA(v === 'fxaa' ? 0 : v === 'msaa' ? 4 : 'auto', v === 'msaa' ? Infinity : MSAA_MAX); },
+      'postfx.ao': (v) => { if (postfx) postfx.aoPass.enabled = !!v; },
+      'postfx.bloom': (v) => { if (postfx) postfx.bloomPass.enabled = !!v; },
+      'shadows.kernel': (v) => atmo.setShadowKernel(v),
+      'time': (v) => { atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(atmo.darkness); },
+    },
+  });
+  const bp = readBenchParams(location.search); if (bp.size) sample.resize(bp.size.w, bp.size.h);
+  sample.setReady();
   engine.start();
   loading.hide(450);
 }

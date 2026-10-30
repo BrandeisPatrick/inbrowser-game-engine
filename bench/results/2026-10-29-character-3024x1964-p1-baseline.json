@@ -1,0 +1,70 @@
+{
+  "page": "character",
+  "label": "p1-baseline",
+  "date": "2026-10-29T12:52:22.231Z",
+  "url": "http://127.0.0.1:5199/character/?bench=1&size=3024x1964",
+  "chrome": "155.0.8059.86",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 556,
+  "poses": [
+    "idle",
+    "run",
+    "aerial"
+  ],
+  "settings": [],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "idle",
+      "ms": 5.467,
+      "fps": 182.93,
+      "hash": "a96d3693",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 62,
+      "triangles": 6970
+    },
+    {
+      "setting": "current",
+      "pose": "run",
+      "ms": 4.908,
+      "fps": 203.74,
+      "hash": "d176eca3",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 62,
+      "triangles": 6970
+    },
+    {
+      "setting": "current",
+      "pose": "aerial",
+      "ms": 4.483,
+      "fps": 223.05,
+      "hash": "4b2cd098",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 63,
+      "triangles": 6976
+    }
+  ]
+}

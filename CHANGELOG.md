@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.0 — 2026-10-29
+General-engine foundations (phase 1 of the 1.0 roadmap, ENGINE.md "Core services", "Character stack",
+"Measurement protocol"): the services a non-driving game needs, a third-person character stack, and the tooling
+that turns the manual measurement protocol into scripts. Every addition is opt-in; `Engine`, Canyon Run and the
+city page render pixel-identically to 0.4.0 (captures hash-equal across page loads with the pinned protocol) and
+`npm test` keeps the roadster vehicle model bit-identical.
+- Core: `Events` (typed emitter, positional `emit`, allocation-free, safe add/remove during emit), `Clock`
+  (`engine.clock`: `timeScale`, `paused`, `step(n)`; the Engine scales the system dt and the fixed accumulator,
+  the profiler and adaptive resolution keep the wall dt), `Entity` / `EntitySystem` (thin component layer over
+  `Object3D`, dense per-phase arrays), `Engine` systems gain `priority` (ordering) and `engine.setSystemEnabled(s, false)` (skip);
+  defaults reproduce 0.4.0 exactly. `test/core.mjs` (107 checks).
+- Core: `Assets` loader registry (cache, URL dedupe, refcounts, weighted progress, `assets.system()` for
+  `engine.load`) with `registerRenderLoaders` (glTF + KTX2 / Draco / meshopt, texture, HDR with PMREM, `.cube`
+  LUT -> `Data3DTexture`) and `registerAudioLoader` / `SamplePlayer` (decoded samples through the existing bus and
+  positional emitters; decoding runs in an OfflineAudioContext before the bus starts, so loading never waits for
+  a gesture; `disposeInstance(root)` frees a clone's skeletons). `test/assets.mjs` (119 checks).
+- Core: `MathDet` deterministic math (`mulberry32`, `hashU32 / hashF64 / hashF64Array`, `detAtan2 / detAcos /
+  detAsin / detAtan` from + - * / sqrt only, max error 4.4e-16) for simulation code that must be bit-identical on
+  every JS engine.
+- Physics: `CharacterController`, a kinematic capsule over the `PhysicsWorld` query API: step climbing, slope
+  limit, wall slide, ground snapping, coyote time, jump buffering (the jump edge is detected internally), vehicle
+  shove, crouch via `setHeight(h, world)` / `canStand` with auto-crouch under a ceiling; no trig in the step path;
+  `test/character-sim.mjs` (134 range checks incl. a golden determinism hash, 12000 steps in ~6 ms).
+- Camera: `ThirdPersonRig` and `FirstPersonRig` on `CameraRig` (damped follow, ChaseRig-style collision pull-in,
+  ground clamp, `turn(dyaw, dpitch)` in radians, yaw basis for camera-relative movement, head bob).
+  `test/rigs.mjs` (83 checks).
+- Input: `CharacterInput` (`CHARACTER_ACTIONS` + touch layout; look deltas in radians, live only under pointer
+  lock or a right-button hold), `PointerLock` (`request() -> Promise<boolean>`, `releasedByUser`) and
+  `InputMap.readSources(name, out)` (per-kind raw sums of an action's bindings). `test/character-input.mjs`
+  (45 checks).
+- Anim (new layer, `@vibe/engine/anim`): `AnimationController` (states, 1D blend trees with cycle sync,
+  transition table, markers, `end` / `loop` / `marker` events, root motion extracted from the hips with the
+  horizontal track neutralised on cloned clips; a finished one-shot holds its last frame by default), `TwoBoneIK`,
+  `CCDIK` / `makeIKChain` over three's CCDIKSolver. `test/anim.mjs` (78 checks).
+- Samples: `samples/` is now a multi-page vite root (`/`, `/canyon-run/`, `/city/`, `/character/`; the dev-only
+  `/city` plugin is gone, `vite build` emits every page). New `samples/character/`: third-person playground with
+  the CC0 RobotExpressive glTF (`node tools/fetch-models.mjs`, never committed) or a procedural rigged fallback
+  built in code, Entity components for motor / animator / facing, pointer-lock mouse look, three rigs.
+- Tooling: `createBenchHarness` (`window.__sample` on every sample: poses, GPU-synced bench, captures, diffs,
+  `run(plan)`), `npm run smoke` (headless Chrome: boot, no console errors, two equal captures per pose) and
+  `npm run bench` (headed Chrome, writes `bench/results/*.json`) through Playwright; `npm test` = `test/all.mjs`;
+  `npm run types` emits `types/` from the JSDoc; GitHub Actions CI runs test + build + types.
+- Measurement protocol: captures reproduce across page loads only with the sky time, cloud offset, wind time and
+  dither-fade view position pinned, exposure frozen and poses run in a fixed order from a fresh load (a stale
+  `uViewPos` alone moved 2-5 % of Canyon Run's pixels). The harness hooks in both samples do this.
+
 ## 0.4.0 — 2026-10-28
 MacBook pass (Apple M-series, Retina 2x, ProMotion): measured in the desktop app's Chromium at a 14-inch MacBook Pro's
 pixel count (3024x1964) with `Profiler.benchThroughput`, pixel diffs read back from the framebuffer. Canyon Run's
