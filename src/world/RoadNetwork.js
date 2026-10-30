@@ -393,7 +393,8 @@ export const DEFAULT_DECK_HOLD = { top: 58, lowerGap: 9, anchorage: 146, minWet:
 
 export class RoadNetwork {
   /**
-   * @param {object} o roads, rail (city.json arrays), raster (Raster with RBIT bits), isWater(x, z), surface (GroundSurface),
+   * @param {{ roads: object[], rail?: object[], raster: object, isWater: Function, surface: object, deckHolds?: object[] }} o
+   *   roads, rail (city.json arrays), raster (Raster with RBIT bits), isWater(x, z), surface (GroundSurface),
    *   deckHolds: [{ name: RegExp, ...DEFAULT_DECK_HOLD }] suspended decks held level over the water (none by default)
    */
   constructor({ roads, rail, raster, isWater, surface, deckHolds = [] }) {

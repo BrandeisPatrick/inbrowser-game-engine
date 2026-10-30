@@ -471,6 +471,7 @@ class ScenePass extends RenderPass {
 // BloomPass reading fx.colorSource (the end of the colour chain TAA -> MotionBlur -> DoF) instead of the scene target.
 class SourceBloomPass extends BloomPass {
   constructor(fx, o) { super(o); this.fx = fx; }
+  /** @param {number} [deltaTime] */
   render(renderer, writeBuffer, readBuffer, deltaTime) { super.render(renderer, writeBuffer, this.fx._source(readBuffer), deltaTime); }
 }
 
@@ -1216,6 +1217,7 @@ export class PostFX {
    * AO buffer size and upsampling at runtime (console A/B); the AO targets resize at once and omitted fields keep
    * their value. scale: of the drawing buffer; maxPixels: pixel budget of the AO buffers (Infinity / null: none);
    * upsample: 'linear' (bilinear tap) | 'depth' (depth-aware, aoAt in the final pass). Returns the AO buffer size.
+   * @param {{ scale?: number, maxPixels?: number|null, upsample?: 'linear'|'depth' }} [o]
    */
   setAOResolution({ scale, maxPixels, upsample } = {}) {
     const ao = this.aoPass;

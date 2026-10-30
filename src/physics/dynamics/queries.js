@@ -331,7 +331,7 @@ function writeHit(out, distance, x, y, z, nx, ny, nz, id) {
  * @param {object} world   DynamicsWorld (or { bodies, broadphase? })
  * @param {number} dx      direction (need not be unit)
  * @param {number} maxDist distance along the normalised direction
- * @param {object} [opts]  mask (bit mask tested against bodies.layer), filter(id) => false skips the body
+ * @param {object|null|undefined} opts  mask (bit mask tested against bodies.layer), filter(id) => false skips the body
  * @param {object} outHit  receives { distance, point, normal, body, box: null, kind: 'rigid', ground: false }
  * @returns {boolean} true on a hit (outHit untouched otherwise)
  */

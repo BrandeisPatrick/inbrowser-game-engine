@@ -94,6 +94,7 @@
 // offset to its segment parent's bone does not change with animation (bones animated by translation, other than the
 // hips, pop to their rest offset on activate); the root (hips) is required. Worker-mode DynamicsClient works for
 // activate / update (poses one or two steps behind); isResting reads its snapshot.
+import * as THREE from 'three';
 import { Vector3, Quaternion, Matrix4 } from 'three';
 import { capsule } from '../physics/dynamics/shapes.js';
 import { jointAtan2 } from '../physics/dynamics/joints.js';

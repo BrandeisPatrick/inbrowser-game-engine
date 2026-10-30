@@ -285,7 +285,7 @@ export class MotionBlurPass extends Pass {
   /**
    * @param {THREE.WebGLRenderer} renderer
    * @param {THREE.WebGLRenderTarget|null} writeBuffer unused
-   * @param {{texture: THREE.Texture, depthTexture: THREE.Texture}} readBuffer colour to blur + scene depth
+   * @param {THREE.WebGLRenderTarget} readBuffer colour to blur + scene depth (texture, depthTexture)
    * @param {number} [deltaTime] frame time (s), for `shutter`
    */
   render(renderer, writeBuffer, readBuffer, deltaTime) {

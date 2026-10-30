@@ -1,0 +1,292 @@
+{
+  "page": "city",
+  "label": "p6-city",
+  "date": "2026-10-30T04:18:18.395Z",
+  "url": "http://localhost:5190/city/?bench=1&size=2560x1440",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152",
+  "headless": false,
+  "platform": "MacIntel macOS",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 12996,
+  "poses": [
+    "street",
+    "crossing",
+    "high",
+    "shore"
+  ],
+  "settings": [
+    {
+      "label": "default",
+      "set": {}
+    },
+    {
+      "label": "gbuffer+taa",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa"
+      }
+    },
+    {
+      "label": "max",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa",
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.dof": true,
+        "postfx.motionBlur": 1,
+        "postfx.ao.normals": "gbuffer",
+        "water.refraction": true
+      }
+    },
+    {
+      "label": "night max clustered",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa",
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.dof": true,
+        "postfx.motionBlur": 1,
+        "postfx.ao.normals": "gbuffer",
+        "water.refraction": true,
+        "time": "night",
+        "lights.mode": "clustered"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "setting": "default",
+      "pose": "street",
+      "ms": 9.258,
+      "fps": 108.01,
+      "hash": "d8de4459",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 171,
+      "triangles": 900440
+    },
+    {
+      "setting": "default",
+      "pose": "crossing",
+      "ms": 9.396,
+      "fps": 106.43,
+      "hash": "eb68a6a8",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 166,
+      "triangles": 835986
+    },
+    {
+      "setting": "default",
+      "pose": "high",
+      "ms": 9.592,
+      "fps": 104.26,
+      "hash": "0dc13c31",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 169,
+      "triangles": 871838
+    },
+    {
+      "setting": "default",
+      "pose": "shore",
+      "ms": 7.221,
+      "fps": 138.49,
+      "hash": "ef57f014",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 80,
+      "triangles": 419012
+    },
+    {
+      "setting": "gbuffer+taa",
+      "pose": "street",
+      "ms": 8.712,
+      "fps": 114.78,
+      "hash": "d5d73ca2",
+      "meanAbs": 1.0651,
+      "p99": 15.438,
+      "max": 124.729,
+      "pctOver2": 11.865,
+      "pctOver8": 2.571,
+      "drawCalls": 169,
+      "triangles": 811545
+    },
+    {
+      "setting": "gbuffer+taa",
+      "pose": "crossing",
+      "ms": 8.992,
+      "fps": 111.21,
+      "hash": "44cdcb39",
+      "meanAbs": 2.2288,
+      "p99": 49.021,
+      "max": 136.25,
+      "pctOver2": 13.969,
+      "pctOver8": 5.816,
+      "drawCalls": 164,
+      "triangles": 754111
+    },
+    {
+      "setting": "gbuffer+taa",
+      "pose": "high",
+      "ms": 9.192,
+      "fps": 108.79,
+      "hash": "5c891f59",
+      "meanAbs": 1.0068,
+      "p99": 12.542,
+      "max": 127.542,
+      "pctOver2": 11.704,
+      "pctOver8": 1.984,
+      "drawCalls": 167,
+      "triangles": 789227
+    },
+    {
+      "setting": "gbuffer+taa",
+      "pose": "shore",
+      "ms": 7.288,
+      "fps": 137.22,
+      "hash": "b377431d",
+      "meanAbs": 0.8031,
+      "p99": 10.188,
+      "max": 85.854,
+      "pctOver2": 9.487,
+      "pctOver8": 1.448,
+      "drawCalls": 86,
+      "triangles": 427909
+    },
+    {
+      "setting": "max",
+      "pose": "street",
+      "ms": 12.908,
+      "fps": 77.47,
+      "hash": "b5836363",
+      "meanAbs": 3.9073,
+      "p99": 28.479,
+      "max": 112.521,
+      "pctOver2": 37.872,
+      "pctOver8": 16.498,
+      "drawCalls": 182,
+      "triangles": 830533
+    },
+    {
+      "setting": "max",
+      "pose": "crossing",
+      "ms": 13.35,
+      "fps": 74.91,
+      "hash": "8aee22d2",
+      "meanAbs": 4.8189,
+      "p99": 46.021,
+      "max": 91.875,
+      "pctOver2": 35.644,
+      "pctOver8": 17.895,
+      "drawCalls": 178,
+      "triangles": 768111
+    },
+    {
+      "setting": "max",
+      "pose": "high",
+      "ms": 13.792,
+      "fps": 72.51,
+      "hash": "8f8b8215",
+      "meanAbs": 3.8428,
+      "p99": 27.458,
+      "max": 127.417,
+      "pctOver2": 42.576,
+      "pctOver8": 15.938,
+      "drawCalls": 181,
+      "triangles": 807099
+    },
+    {
+      "setting": "max",
+      "pose": "shore",
+      "ms": 12.467,
+      "fps": 80.21,
+      "hash": "7a4c3801",
+      "meanAbs": 3.7683,
+      "p99": 30.208,
+      "max": 85.313,
+      "pctOver2": 35.225,
+      "pctOver8": 14.413,
+      "drawCalls": 102,
+      "triangles": 442235
+    },
+    {
+      "setting": "night max clustered",
+      "pose": "street",
+      "ms": 14.167,
+      "fps": 70.59,
+      "hash": "49bf0fb0",
+      "meanAbs": 42.4739,
+      "p99": 128.604,
+      "max": 224.104,
+      "pctOver2": 99.999,
+      "pctOver8": 99.737,
+      "drawCalls": 159,
+      "triangles": 736955
+    },
+    {
+      "setting": "night max clustered",
+      "pose": "crossing",
+      "ms": 14.725,
+      "fps": 67.91,
+      "hash": "8ed75b5e",
+      "meanAbs": 43.7578,
+      "p99": 148.292,
+      "max": 198.979,
+      "pctOver2": 99.998,
+      "pctOver8": 99.694,
+      "drawCalls": 151,
+      "triangles": 666701
+    },
+    {
+      "setting": "night max clustered",
+      "pose": "high",
+      "ms": 15.233,
+      "fps": 65.65,
+      "hash": "312559ff",
+      "meanAbs": 44.4564,
+      "p99": 100.958,
+      "max": 205.813,
+      "pctOver2": 99.959,
+      "pctOver8": 98.813,
+      "drawCalls": 160,
+      "triangles": 721449
+    },
+    {
+      "setting": "night max clustered",
+      "pose": "shore",
+      "ms": 13.496,
+      "fps": 74.1,
+      "hash": "d7188df1",
+      "meanAbs": 71.7778,
+      "p99": 144.063,
+      "max": 166.292,
+      "pctOver2": 99.999,
+      "pctOver8": 99.853,
+      "drawCalls": 87,
+      "triangles": 364749
+    }
+  ]
+}

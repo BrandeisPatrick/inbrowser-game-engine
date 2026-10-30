@@ -157,7 +157,12 @@ export class ChaseRig extends CameraRig {
   }
   get modeConfig() { return this.modes[this.mode]; }
 
-  /** Register a mode; it joins the cycle unless { cycle: false }. */
+  /**
+   * Register a mode; it joins the cycle unless { cycle: false }.
+   * @param {string} name
+   * @param {object} config
+   * @param {{ cycle?: boolean, index?: number }} [o]  index: position in the cycle (default: appended)
+   */
   addMode(name, config, { cycle = true, index } = {}) {
     this.modes[name] = config;
     if (cycle && !this.modeOrder.includes(name)) {

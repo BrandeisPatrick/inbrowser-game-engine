@@ -67,6 +67,12 @@ export class Events {
   /**
    * Call the listeners of `type` with up to four positional args. Allocation-free. Returns true when at least one
    * listener ran.
+   * @param {string} type
+   * @param {*} [a]
+   * @param {*} [b]
+   * @param {*} [c]
+   * @param {*} [d]
+   * @returns {boolean}
    */
   emit(type, a, b, c, d) {
     const r = this._types.get(type);

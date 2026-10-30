@@ -380,7 +380,7 @@ export class DoFPass extends Pass {
   /**
    * @param {THREE.WebGLRenderer} renderer
    * @param {THREE.WebGLRenderTarget|null} writeBuffer unused
-   * @param {{texture: THREE.Texture, depthTexture: THREE.Texture}} readBuffer colour + scene depth
+   * @param {THREE.WebGLRenderTarget} readBuffer colour + scene depth (texture, depthTexture)
    */
   render(renderer, writeBuffer, readBuffer) {
     const cam = this.camera, near = this._nearBlur, stable = this._stableDepth;

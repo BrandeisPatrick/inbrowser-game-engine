@@ -1,0 +1,99 @@
+{
+  "page": "sandbox",
+  "label": "p6-sandbox-stack",
+  "date": "2026-10-30T04:19:24.616Z",
+  "url": "http://localhost:5190/sandbox/?bench=1&size=3024x1964&scene=stack",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152",
+  "headless": false,
+  "platform": "MacIntel macOS",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 3354,
+  "poses": [
+    "overview",
+    "close"
+  ],
+  "settings": [
+    {
+      "label": "default",
+      "set": {}
+    },
+    {
+      "label": "max",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa",
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.dof": true,
+        "postfx.motionBlur": 1,
+        "postfx.ao.normals": "gbuffer"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "setting": "default",
+      "pose": "overview",
+      "ms": 5.25,
+      "fps": 190.48,
+      "hash": "21f2e921",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "default",
+      "pose": "close",
+      "ms": 5.063,
+      "fps": 197.53,
+      "hash": "45c0fe69",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 25,
+      "triangles": 2794
+    },
+    {
+      "setting": "max",
+      "pose": "overview",
+      "ms": 12.729,
+      "fps": 78.56,
+      "hash": "95559f95",
+      "meanAbs": 0.876,
+      "p99": 7.604,
+      "max": 32.104,
+      "pctOver2": 13.778,
+      "pctOver8": 0.909,
+      "drawCalls": 39,
+      "triangles": 2808
+    },
+    {
+      "setting": "max",
+      "pose": "close",
+      "ms": 13.042,
+      "fps": 76.68,
+      "hash": "c59828a8",
+      "meanAbs": 2.2464,
+      "p99": 26.688,
+      "max": 85.292,
+      "pctOver2": 20.741,
+      "pctOver8": 8.384,
+      "drawCalls": 39,
+      "triangles": 2808
+    }
+  ]
+}

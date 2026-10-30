@@ -1770,7 +1770,7 @@ function flush(np, contacts) {
  */
 export class Narrowphase {
   /**
-   * @param {{ maxContacts?: number, margin?: number, tableSize?: number }} [o]
+   * @param {{ maxContacts?: number, margin?: number, tableSize?: number, timing?: boolean, hfStep?: number, hfCell?: number }} [o]
    *   maxContacts: contacts this narrowphase appends to a buffer (beyond it they are dropped and counted in
    *   contacts.overflow); margin: speculative contact distance (m); tableSize: persistent table slots (rounded up to a
    *   power of two; keep it >= 2 x the contacts per step); timing: accumulate stats.ms (performance.now() twice

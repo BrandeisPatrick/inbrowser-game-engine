@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0 — 2026-10-30
+The release of the 1.0 roadmap (phases 0.5.0 - 0.9.0, ENGINE.md): a general engine with its graphics and physics pushed as
+far as the phases took them, measured. No engine behaviour changes against 0.9.0: the source changes are JSDoc comments,
+two namespace imports of three and one rest parameter. Canyon Run's eight day poses capture pixel-identical to 0.8.0 in
+the app's browser at both sizes, `npm run smoke` passes on all 12 pages (every pose it printed hashes as in earlier
+runs), and the car-sim / world-build pins are untouched since 0.4.0.
+- Package: the TypeScript declarations emitted from the JSDoc ship with the package (`types/`, emitted by `prepack`)
+  and are exported for the root and every subpath (`"types"`, `exports[*].types`); a strict TypeScript consumer
+  compiles against them with `skipLibCheck` off (`test/types/check.ts`, `npm run types:check`, run by CI). JSDoc fixes
+  in 20 source files for that (option bags and overrides that emitted wrong or incomplete types; the two a consumer
+  hit first: the `Cloth.grid` / `Rope.chain` option lists and `Events.emit` with its four positional args optional;
+  no runtime change). The package description and keywords say what the engine is now.
+- CI runs on Node 26, the V8 the allocation budgets are calibrated on (0.9.0 note), and runs `types:check`.
+- Docs: README and ENGINE.md consolidated for 1.0 (the stale SMAA and Rapier-backend claims gone; "Engine API" is the
+  real one; "Rapier plug-in contract" states the DynamicsWorld surface a replacement must provide; "Measurement
+  protocol" covers the 1.0 sweep, whose plan is `bench/release-sweep.js`).
+- Measured (1.0): every sample page, every pose, at 3024x1964 and 2560x1440, engine defaults against everything on, in
+  the desktop app's browser (`bench/results/2026-10-30-*-p6-*.json`; tables in ENGINE.md "Measured (1.0)").
+  Defaults within 0.1-0.8 ms of the 0.5.0 baseline (Canyon Run straight 8.25 ms at 3024x1964, city street 12.54,
+  character idle 5.34, sandbox stack 5.25); G-buffer + TAA +2.4-2.8 ms at 3024x1964 on Canyon Run and cheaper than
+  the 4x MSAA default at 2560x1440 (7.32 vs 7.59); everything on (SSR, volumetrics, DoF, motion blur, G-buffer AO
+  normals, PCSS) +8-10 ms at 3024x1964 and +4-5 ms at 2560x1440 on every page (Canyon Run 17.18 / 11.57, city
+  18.72 / 12.91, character 13.43 / 8.79, sandbox 12.73 / 8.70); the night city with every lamp clustered 21.1 / 14.2.
+
 ## 0.9.0 — 2026-10-29
 Unified XPBD (phase 5 of the 1.0 roadmap, ENGINE.md "Unified XPBD (0.9.0)"): particles, cloth, ropes, soft bodies,
 particle-rigid coupling, buoyancy, pre-fractured bodies, character dynamics and ragdolls, all on the 0.6.0 solver; a
