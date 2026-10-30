@@ -2,8 +2,10 @@
 
 ## 1.0.0 — 2026-10-30
 The release of the 1.0 roadmap (phases 0.5.0 - 0.9.0, ENGINE.md): a general engine with its graphics and physics pushed as
-far as the phases took them, measured. No engine behaviour changes against 0.9.0: every default renders and steps as
-0.9.0 (`npm run smoke` hashes equal; the car-sim / world-build pins untouched since 0.4.0).
+far as the phases took them, measured. No engine behaviour changes against 0.9.0: the source changes are JSDoc comments,
+two namespace imports of three and one rest parameter. Canyon Run's eight day poses capture pixel-identical to 0.8.0 in
+the app's browser at both sizes, `npm run smoke` passes on all 12 pages (every pose it printed hashes as in earlier
+runs), and the car-sim / world-build pins are untouched since 0.4.0.
 - Package: the TypeScript declarations emitted from the JSDoc ship with the package (`types/`, emitted by `prepack`)
   and are exported for the root and every subpath (`"types"`, `exports[*].types`); a strict TypeScript consumer
   compiles against them with `skipLibCheck` off (`test/types/check.ts`, `npm run types:check`, run by CI). JSDoc fixes
