@@ -26,6 +26,7 @@ const DT = 1 / 120;
 let failures = 0;
 const results = [];
 const fmt = (x) => (!Number.isFinite(x) ? String(x) : Number.isInteger(x) ? String(x) : Math.abs(x) < 1e-3 && x !== 0 ? x.toExponential(2) : x.toFixed(4)).padStart(12);
+let _allocSink = null; // section 14's control stores its arrays here so V8 cannot elide them
 function check(name, value, lo, hi, unit = '') {
   const v = typeof value === 'boolean' ? (value ? 1 : 0) : value;
   const ok = Number.isFinite(v) && v >= lo && v <= hi;
@@ -418,20 +419,34 @@ for (const mu of [0.6, 0.2]) {
   for (let k = 0; k < 300; k++) frame();   // warm-up (JIT, pools, event sets)
   if (gc) gc();
   const h0 = process.memoryUsage().heapUsed;
-  // bytes per step in 10 blocks of 50 steps: blocks in which V8 (re)compiles another module's hot function (code and
-  // feedback are heap allocations too) read up to tens of KB, so the quietest block is the steady-state figure
+  // bytes per step in blocks of 50 steps. A block's figure mixes real per-step garbage with V8 work that is not the
+  // engine's: HeapNumber boxing in code V8 has not (re)optimised yet (the joint tree solver and the contact rows box a
+  // few hundred bytes per step until then) and the code / feedback objects of functions it compiles in that block. Both
+  // come and go: blocks read 0.2 - 60 KB per step on the M4, and on a shared 2-core CI runner, where the background
+  // compiler is slower, the quietest of a fixed first 10 blocks once read 3.4 KB. Under load the quietest block
+  // settles at a floor of ~2 KB on the M4 too, while the sampling heap profiler puts only a few hundred bytes per step
+  // in the engine's own frames (the attribution check below): the floor is V8's, and the old 2 KB budget sat on it.
+  // So the budget is 6 KB (about 2x the worst runner reading) and at least 10 blocks run, then more, up to MAX_BLOCKS,
+  // until one is under it. Real garbage (an object or array per contact or per body and substep: ~10 KB per step and
+  // up) is in every block and still fails: the control below allocates one array per contact and reads ~21 KB.
+  const BUDGET = 6144, MIN_BLOCKS = 10, MAX_BLOCKS = 60;
   const blocks = [];
-  for (let q = 0; q < 10; q++) {
+  let per = Infinity;
+  for (let q = 0; q < MAX_BLOCKS && (q < MIN_BLOCKS || per > BUDGET); q++) {
     const b0 = allocated();
     for (let k = 0; k < 50; k++) frame();
-    blocks.push((allocated() - b0) / 50);
+    const v = (allocated() - b0) / 50;
+    blocks.push(v);
+    if (v < per) per = v;
   }
   if (gc) gc();
   const h1 = process.memoryUsage().heapUsed;
-  check('alloc: retained heap growth over 500 steps (gc before/after)', (h1 - h0) / 1024, -Infinity, 64, 'KB');
+  check(`alloc: retained heap growth over ${blocks.length * 50} steps (gc before/after)`, (h1 - h0) / 1024, -Infinity, 64, 'KB');
   blocks.sort((x, y) => x - y);
-  const per = blocks[0];
-  check('alloc: bytes allocated per step in total, quietest 50-step block (timing off)', per, 0, 2048, 'B');
+  // the exact counter (Node >= 26) only: a heapUsed delta drops by whatever a GC inside the block frees, so a block
+  // can read hundreds of KB below zero and the minimum means nothing (Node 22: -163 KB per step)
+  if (exact) check(`alloc: bytes allocated per step in total, quietest of ${blocks.length} 50-step blocks (timing off)`, per, 0, BUDGET, 'B');
+  else note('alloc: bytes per step not checked: total_allocated_bytes needs Node >= 26 (heapUsed deltas include GC)');
   // attribution: sample every allocation of 200 more steps, sum the bytes allocated in this world's own frames
   let own = NaN, top = '';
   try {
@@ -459,9 +474,21 @@ for (const mu of [0.6, 0.2]) {
   // the sampling profiler's per-file attribution of HeapNumber boxing varies with the V8 build (Node 26 arm64 ~130 B,
   // Node 22 x64 ~1100 B): a loose bound catches real per-step garbage (arrays, closures: tens of KB), not boxing
   if (Number.isFinite(own)) check('alloc: bytes per step allocated in DynamicsWorld.js / islands.js', own, 0, 4096, 'B');
-  note(`alloc: ${per.toFixed(0)} B allocated per step in total (median block ${blocks[5].toFixed(0)}, max ${blocks[9].toFixed(0)})` +
+  // control: the same world plus one 3-element array per contact per step (what a regression that builds a temporary
+  // vector per contact allocates, ~70 B x ~290 contacts) never yields a block under the budget
+  if (exact) {
+    let ctl = Infinity;
+    for (let q = 0; q < MIN_BLOCKS; q++) {
+      const b0 = allocated();
+      for (let k = 0; k < 50; k++) { frame(); for (let c = 0; c < w.contacts.count; c++) _allocSink = [c, c + 1, c + 2]; }
+      const v = (allocated() - b0) / 50;
+      if (v < ctl) ctl = v;
+    }
+    check(`alloc: control: an array per contact per step is detected (quietest of ${MIN_BLOCKS} blocks)`, ctl, BUDGET, Infinity, 'B');
+  }
+  note(`alloc: ${per.toFixed(0)} B allocated per step in total (median block ${blocks[blocks.length >> 1].toFixed(0)}, max ${blocks[blocks.length - 1].toFixed(0)}, ${blocks.length} blocks)` +
     `${exact ? '' : ' (heapUsed delta, approximate: Node < 26)'} with ${w.stats.contacts} contacts, ${w.stats.awake} awake, ` +
-    `steps 300..800; sampled by file (B/step): ${top || 'n/a'}. ` +
+    `steps 300..${300 + blocks.length * 50}; sampled by file (B/step): ${top || 'n/a'}. ` +
     'A fresh world allocates ~30 KB/step (V8 boxing in narrowphase.flush -> ContactBuffer.add) until V8 optimises flush');
   if (!gc) note('no gc available: retained heap growth measured without gc');
 }

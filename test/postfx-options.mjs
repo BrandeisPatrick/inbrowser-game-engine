@@ -35,6 +35,7 @@ const maxDiff = (a, b) => a.elements.reduce((m, v, i) => Math.max(m, Math.abs(v 
 const maxDiffIdentity = (m) => maxDiff(m, new THREE.Matrix4());
 
 performance.now(); process.memoryUsage();
+let _sink = null; // allocation checks store results here so V8 cannot elide them
 function measureAlloc(fn) {
   const prof = new v8.GCProfiler();
   prof.start();
@@ -206,10 +207,18 @@ function pixel(proj, cam, p, W, H) {
   check('weights: centre heaviest, symmetric (no jitter)', w[4] > w[1] && w[1] === w[3] && w[3] === w[5] && w[5] === w[7] && w[0] === w[8]);
   const half = taaFilterWeights(0.5, 0);
   check('weights: jitter +0.5 px x -> columns -1 and 0 equal', Math.abs(half[3] - half[4]) < 1e-7 && half[5] < half[3]);
+  // bytes per call, not a GC count: the loop passes a computed jitter, which V8 boxes (one 16 B HeapNumber per call)
+  // whenever it does not inline the call, ~800 KB over 50000 calls, enough for one scavenge on a small young generation
+  // (the CI runner: 'no GC' failed there while the function allocates nothing). A Float32Array per call is ~100+ B,
+  // which the control (no `out`: the default parameter allocates one) shows is caught.
   const out = new Float32Array(9);
-  for (let i = 0; i < 50000; i++) taaFilterWeights(i % 7 * 0.1 - 0.3, 0.2, out); // warm (and a young generation emptied by it)
-  const a = measureAlloc(() => { for (let i = 0; i < 50000; i++) taaFilterWeights(i % 7 * 0.1 - 0.3, 0.2, out); });
-  check('taaFilterWeights into out: no GC', a.gcs, 0, 0);
+  const run = (n, o) => { for (let i = 0; i < n; i++) _sink = taaFilterWeights(i % 7 * 0.1 - 0.3, 0.2, o); };
+  run(50000, out); // warm
+  const per = allocated(() => run(50000, out)) / 50000;
+  check('taaFilterWeights into out: bytes / call (one boxed double = 16)', per, -Infinity, 24, 'B');
+  run(50000, undefined);
+  const ctl = allocated(() => run(50000, undefined)) / 50000;
+  check('taaFilterWeights control: without out, its Float32Array per call is detected', ctl, 48, Infinity, 'B');
 }
 
 // ================================================================================================= resolveAA
