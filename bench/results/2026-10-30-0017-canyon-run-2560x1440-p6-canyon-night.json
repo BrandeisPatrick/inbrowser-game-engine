@@ -1,0 +1,129 @@
+{
+  "page": "canyon-run",
+  "label": "p6-canyon-night",
+  "date": "2026-10-30T04:17:27.470Z",
+  "url": "http://localhost:5190/canyon-run/?bench=1&size=2560x1440&lamps=1&t=night&gpuparticles=1",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152",
+  "headless": false,
+  "platform": "MacIntel macOS",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 3537,
+  "poses": [
+    "night-lamps",
+    "devils",
+    "chase"
+  ],
+  "settings": [
+    {
+      "label": "default (lamps, gpu particles)",
+      "set": {}
+    },
+    {
+      "label": "max",
+      "set": {
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa",
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.dof": true,
+        "postfx.motionBlur": 1,
+        "postfx.ao.normals": "gbuffer",
+        "shadows.kernel": "pcss"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "setting": "default (lamps, gpu particles)",
+      "pose": "night-lamps",
+      "ms": 5.987,
+      "fps": 167.01,
+      "hash": "ea530f96",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 58,
+      "triangles": 678948
+    },
+    {
+      "setting": "default (lamps, gpu particles)",
+      "pose": "devils",
+      "ms": 6.258,
+      "fps": 159.79,
+      "hash": "594684e8",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 50,
+      "triangles": 712100
+    },
+    {
+      "setting": "default (lamps, gpu particles)",
+      "pose": "chase",
+      "ms": 6.533,
+      "fps": 153.06,
+      "hash": "0804e476",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 65,
+      "triangles": 887552
+    },
+    {
+      "setting": "max",
+      "pose": "night-lamps",
+      "ms": 11.117,
+      "fps": 89.96,
+      "hash": "1a794253",
+      "meanAbs": 1.1673,
+      "p99": 16.229,
+      "max": 65.292,
+      "pctOver2": 12.211,
+      "pctOver8": 3.577,
+      "drawCalls": 71,
+      "triangles": 687245
+    },
+    {
+      "setting": "max",
+      "pose": "devils",
+      "ms": 11.767,
+      "fps": 84.99,
+      "hash": "7ec86e0f",
+      "meanAbs": 1.3328,
+      "p99": 16.479,
+      "max": 63.563,
+      "pctOver2": 13.947,
+      "pctOver8": 2.989,
+      "drawCalls": 63,
+      "triangles": 712113
+    },
+    {
+      "setting": "max",
+      "pose": "chase",
+      "ms": 11.85,
+      "fps": 84.39,
+      "hash": "1d1dd578",
+      "meanAbs": 0.7777,
+      "p99": 11.104,
+      "max": 50.354,
+      "pctOver2": 7.809,
+      "pctOver8": 1.864,
+      "drawCalls": 78,
+      "triangles": 887565
+    }
+  ]
+}

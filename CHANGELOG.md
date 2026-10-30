@@ -16,7 +16,11 @@ far as the phases took them, measured. No engine behaviour changes against 0.9.0
   protocol" covers the 1.0 sweep, whose plan is `bench/release-sweep.js`).
 - Measured (1.0): every sample page, every pose, at 3024x1964 and 2560x1440, engine defaults against everything on, in
   the desktop app's browser (`bench/results/2026-10-30-*-p6-*.json`; tables in ENGINE.md "Measured (1.0)").
-  MEASURED_SUMMARY_PLACEHOLDER
+  Defaults within 0.1-0.8 ms of the 0.5.0 baseline (Canyon Run straight 8.25 ms at 3024x1964, city street 12.54,
+  character idle 5.34, sandbox stack 5.25); G-buffer + TAA +2.4-2.8 ms at 3024x1964 on Canyon Run and cheaper than
+  the 4x MSAA default at 2560x1440 (7.32 vs 7.59); everything on (SSR, volumetrics, DoF, motion blur, G-buffer AO
+  normals, PCSS) +8-10 ms at 3024x1964 and +4-5 ms at 2560x1440 on every page (Canyon Run 17.18 / 11.57, city
+  18.72 / 12.91, character 13.43 / 8.79, sandbox 12.73 / 8.70); the night city with every lamp clustered 21.1 / 14.2.
 
 ## 0.9.0 — 2026-10-29
 Unified XPBD (phase 5 of the 1.0 roadmap, ENGINE.md "Unified XPBD (0.9.0)"): particles, cloth, ropes, soft bodies,

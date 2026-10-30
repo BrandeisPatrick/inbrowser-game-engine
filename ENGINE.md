@@ -1088,4 +1088,103 @@ from warm runs in one environment.
 | city | high | 13.25 | 10.42 | 176 | 0.86 M |
 
 ## Measured (1.0): every sample, every pose, both sizes
-MEASURED_1_0_PLACEHOLDER
+Apple M4, the desktop app's Chromium 152 (ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)), drawing buffer pinned at pixel ratio 1, 24 frames per cell after 3 warm-up frames, GPU otherwise idle. `diff` = mean absolute per-pixel difference (0..255) against the `default` row of the same pose at that size; `draws` / `tris` from the default row at 3024x1964.
+
+What the tables say (the per-knob costs of each feature are in the 0.7.0 / 0.8.0 tables; this is the whole engine at
+once):
+- **Defaults are where they were.** Every default pose is within 0.1-0.8 ms of its 0.5.0 baseline and 0.9.0 figure
+  (Canyon Run straight 8.25 ms at 3024x1964 against 8.39 in 0.5.0; city street 12.54 against 13.31; character idle
+  5.34 against 5.47): six releases of features added nothing to a scene that does not switch them on.
+- **G-buffer + TAA** costs +2.4-2.8 ms at 3024x1964 on Canyon Run (the TAA resolve is bandwidth-bound at 5.9 Mpx,
+  0.7.0 finding) and is *cheaper* than the default at 2560x1440 (7.32 against 7.59: the default there is 4x MSAA, whose
+  resolve the G-buffer path does not pay). The city and the character pay 0-2.3 ms at 3024 and nothing at 2560.
+- **Everything on** (SSR, volumetrics, depth of field, motion blur, G-buffer AO normals, PCSS where the page has it)
+  is +8-10 ms at 3024x1964 and +4-5 ms at 2560x1440 on every page (Canyon Run straight 17.18 / 11.57, city street
+  18.72 / 12.91, character idle 13.43 / 8.79, sandbox stack 12.73 / 8.70): DoF and motion blur are the two largest
+  shares (0.8.0 table), both resolution-bound, so a 60 Hz budget at 3024x1964 picks among them and a 120 Hz one at
+  2560x1440 keeps two or three.
+- **Night city with every lamp clustered** (plus everything on, plus water refraction): 21.1 ms at 3024x1964, 14.2 at
+  2560x1440, 2.4 ms over the day `max` row; its `diff` of 43-73 is day against night, not a defect.
+- **Pixel diffs.** `gbuffer+taa` against the default is the anti-aliasing difference (0.1-0.36 mean on Canyon Run and
+  the character; 0.8-2.5 on the city, whose default is FXAA at these sizes and whose streaming state can differ by a
+  tile between settings); `max` moves 1-5 mean (depth of field, reflections and in-scatter are meant to change the
+  image). The sandbox scenes render their frozen pose only (the physics step is measured in "Unified XPBD (0.9.0)").
+
+### canyon-run (canyon)
+| pose | setting | ms 3024x1964 | ms 2560x1440 | diff 3024 | diff 2560 | draws | tris |
+|---|---|---|---|---|---|---|---|
+| straight | default | 8.25 | 7.59 | ref | ref | 53 | 0.56 M |
+| straight | gbuffer+taa | 10.66 | 7.32 | 0.317 | 0.312 | 54 | 0.56 M |
+| straight | max | 17.18 | 11.57 | 1.852 | 1.539 | 67 | 0.56 M |
+| chase | default | 8.63 | 7.65 | ref | ref | 57 | 0.69 M |
+| chase | gbuffer+taa | 11.10 | 7.85 | 0.356 | 0.264 | 58 | 0.69 M |
+| chase | max | 17.83 | 12.05 | 0.829 | 0.697 | 71 | 0.69 M |
+| aerial | default | 8.78 | 8.72 | ref | ref | 54 | 0.74 M |
+| aerial | gbuffer+taa | 11.43 | 8.34 | 0.350 | 0.224 | 55 | 0.74 M |
+| aerial | max | 18.18 | 12.83 | 1.244 | 1.084 | 68 | 0.74 M |
+| ahead | default | 5.57 | 5.86 | ref | ref | 44 | 0.59 M |
+| ahead | gbuffer+taa | 7.87 | 5.62 | 0.344 | 0.228 | 45 | 0.59 M |
+| ahead | max | 14.12 | 9.55 | 1.194 | 1.058 | 58 | 0.59 M |
+
+### canyon-run (canyon-night)
+| pose | setting | ms 3024x1964 | ms 2560x1440 | diff 3024 | diff 2560 | draws | tris |
+|---|---|---|---|---|---|---|---|
+| night-lamps | default (lamps, gpu particles) | 8.58 | 5.99 | ref | ref | 58 | 0.68 M |
+| night-lamps | max | 16.83 | 11.12 | 1.395 | 1.167 | 71 | 0.69 M |
+| devils | default (lamps, gpu particles) | 9.16 | 6.26 | ref | ref | 50 | 0.71 M |
+| devils | max | 17.65 | 11.77 | 1.472 | 1.333 | 63 | 0.71 M |
+| chase | default (lamps, gpu particles) | 9.32 | 6.53 | ref | ref | 62 | 0.82 M |
+| chase | max | 18.02 | 11.85 | 0.835 | 0.778 | 75 | 0.82 M |
+
+### city (city)
+| pose | setting | ms 3024x1964 | ms 2560x1440 | diff 3024 | diff 2560 | draws | tris |
+|---|---|---|---|---|---|---|---|
+| street | default | 12.54 | 9.26 | ref | ref | 167 | 0.86 M |
+| street | gbuffer+taa | 12.22 | 8.71 | 0.975 | 1.065 | 159 | 0.75 M |
+| street | max | 18.72 | 12.91 | 4.246 | 3.907 | 172 | 0.77 M |
+| street | night max clustered | 21.10 | 14.17 | 43.586 | 42.474 | 155 | 0.69 M |
+| crossing | default | 12.99 | 9.40 | ref | ref | 163 | 0.82 M |
+| crossing | gbuffer+taa | 12.93 | 8.99 | 2.454 | 2.229 | 155 | 0.72 M |
+| crossing | max | 19.35 | 13.35 | 5.023 | 4.819 | 169 | 0.73 M |
+| crossing | night max clustered | 21.51 | 14.72 | 45.576 | 43.758 | 145 | 0.64 M |
+| high | default | 13.60 | 9.59 | ref | ref | 164 | 0.84 M |
+| high | gbuffer+taa | 13.07 | 9.19 | 0.963 | 1.007 | 155 | 0.74 M |
+| high | max | 22.44 | 13.79 | 4.370 | 3.843 | 169 | 0.76 M |
+| high | night max clustered | 22.57 | 15.23 | 43.950 | 44.456 | 153 | 0.69 M |
+| shore | default | 10.17 | 7.22 | ref | ref | 77 | 0.40 M |
+| shore | gbuffer+taa | 10.37 | 7.29 | 0.761 | 0.803 | 80 | 0.40 M |
+| shore | max | 18.80 | 12.47 | 4.053 | 3.768 | 98 | 0.42 M |
+| shore | night max clustered | 20.63 | 13.50 | 73.271 | 71.778 | 82 | 0.34 M |
+
+### character (character)
+| pose | setting | ms 3024x1964 | ms 2560x1440 | diff 3024 | diff 2560 | draws | tris |
+|---|---|---|---|---|---|---|---|
+| idle | default | 5.34 | 4.94 | ref | ref | 62 | 0.01 M |
+| idle | gbuffer+taa | 7.12 | 4.85 | 0.154 | 0.097 | 63 | 0.01 M |
+| idle | max | 13.43 | 8.79 | 1.709 | 1.690 | 76 | 0.01 M |
+| run | default | 5.03 | 4.58 | ref | ref | 62 | 0.01 M |
+| run | gbuffer+taa | 7.36 | 4.85 | 0.156 | 0.092 | 63 | 0.01 M |
+| run | max | 13.81 | 9.01 | 1.608 | 1.605 | 76 | 0.01 M |
+| aerial | default | 4.50 | 4.27 | ref | ref | 63 | 0.01 M |
+| aerial | gbuffer+taa | 6.80 | 4.56 | 0.353 | 0.151 | 64 | 0.01 M |
+| aerial | max | 13.39 | 8.72 | 1.472 | 1.155 | 77 | 0.01 M |
+| push | default | 5.39 | 5.05 | ref | ref | 64 | 0.01 M |
+| push | gbuffer+taa | 7.67 | 5.31 | 0.180 | 0.106 | 65 | 0.01 M |
+| push | max | 13.90 | 9.25 | 1.535 | 1.587 | 78 | 0.01 M |
+| ragdoll | default | 5.81 | 5.45 | ref | ref | 64 | 0.01 M |
+| ragdoll | gbuffer+taa | 7.73 | 5.31 | 0.217 | 0.087 | 65 | 0.01 M |
+| ragdoll | max | 14.08 | 9.26 | 1.179 | 1.136 | 78 | 0.01 M |
+
+### sandbox (scenes; render only, the loop is frozen at the pose)
+| scene | overview default 3024 / 2560 | overview max 3024 / 2560 | close default 3024 / 2560 | close max 3024 / 2560 | max diff (overview, 3024) | draws | tris |
+|---|---|---|---|---|---|---|---|
+| bench1000 | 5.53 / 5.28 | 13.38 / 9.23 | 6.09 / 5.80 | 14.28 / 9.95 | 2.439 | 39 | 0.71 M |
+| buoyancy | 5.71 / 5.64 | 13.46 / 8.69 | 6.20 / 5.82 | 14.96 / 9.70 | 1.722 | 39 | 0.02 M |
+| cloth | 5.37 / 5.30 | 13.54 / 8.92 | 5.43 / 5.15 | 13.53 / 9.01 | 1.332 | 27 | 0.01 M |
+| rope | 5.09 / 5.01 | 12.56 / 8.28 | 5.04 / 4.65 | 13.07 / 8.65 | 0.792 | 43 | 0.01 M |
+| soft | 5.57 / 5.01 | 13.25 / 8.70 | 5.44 / 5.04 | 13.45 / 8.98 | 1.086 | 29 | 0.00 M |
+| stack | 5.25 / 4.75 | 12.73 / 8.70 | 5.06 / 4.76 | 13.04 / 8.93 | 0.876 | 25 | 0.00 M |
+| destructible | 5.31 / 4.68 | 13.47 / 8.40 | 5.56 / 5.29 | 13.66 / 8.99 | 1.006 | 183 | 0.00 M |
+
+Files: `2026-10-30-0016-canyon-run-2560x1440-p6-canyon.json`, `2026-10-30-0016-canyon-run-3024x1964-p6-canyon.json`, `2026-10-30-0017-canyon-run-2560x1440-p6-canyon-night.json`, `2026-10-30-0017-canyon-run-3024x1964-p6-canyon-night.json`, `2026-10-30-0017-city-3024x1964-p6-city.json`, `2026-10-30-0018-character-2560x1440-p6-character.json`, `2026-10-30-0018-character-3024x1964-p6-character.json`, `2026-10-30-0018-city-2560x1440-p6-city.json`, `2026-10-30-0019-sandbox-3024x1964-p6-sandbox-bench1000.json`, `2026-10-30-0019-sandbox-3024x1964-p6-sandbox-buoyancy.json`, `2026-10-30-0019-sandbox-3024x1964-p6-sandbox-cloth.json`, `2026-10-30-0019-sandbox-3024x1964-p6-sandbox-rope.json`, `2026-10-30-0019-sandbox-3024x1964-p6-sandbox-soft.json`, `2026-10-30-0019-sandbox-3024x1964-p6-sandbox-stack.json`, `2026-10-30-0020-sandbox-2560x1440-p6-sandbox-bench1000.json`, `2026-10-30-0020-sandbox-2560x1440-p6-sandbox-buoyancy.json`, `2026-10-30-0020-sandbox-2560x1440-p6-sandbox-cloth.json`, `2026-10-30-0020-sandbox-2560x1440-p6-sandbox-rope.json`, `2026-10-30-0020-sandbox-2560x1440-p6-sandbox-soft.json`, `2026-10-30-0020-sandbox-2560x1440-p6-sandbox-stack.json`, `2026-10-30-0020-sandbox-3024x1964-p6-sandbox-destructible.json`, `2026-10-30-0021-sandbox-2560x1440-p6-sandbox-destructible.json`.
+
