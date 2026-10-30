@@ -199,6 +199,7 @@ function pixel(proj, cam, p, W, H) {
   const half = taaFilterWeights(0.5, 0);
   check('weights: jitter +0.5 px x -> columns -1 and 0 equal', Math.abs(half[3] - half[4]) < 1e-7 && half[5] < half[3]);
   const out = new Float32Array(9);
+  for (let i = 0; i < 50000; i++) taaFilterWeights(i % 7 * 0.1 - 0.3, 0.2, out); // warm (and a young generation emptied by it)
   const a = measureAlloc(() => { for (let i = 0; i < 50000; i++) taaFilterWeights(i % 7 * 0.1 - 0.3, 0.2, out); });
   check('taaFilterWeights into out: no GC', a.gcs, 0, 0);
 }
