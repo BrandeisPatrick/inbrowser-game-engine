@@ -36,6 +36,13 @@ const SUITES = [
   { file: 'volumetric.mjs' },
   { file: 'blur-dof-lut.mjs' },
   { file: 'water.mjs', shim: true },
+  // physics (0.9.0): particles / cloth / rope, soft bodies, coupling + buoyancy, fracture, character dynamics, ragdoll
+  { file: 'dyn-cloth.mjs' },
+  { file: 'dyn-soft.mjs' },
+  { file: 'dyn-buoyancy.mjs' },
+  { file: 'dyn-fracture.mjs' },
+  { file: 'character-dyn.mjs' },
+  { file: 'ragdoll.mjs', shim: true },
 ];
 let failed = 0, ran = 0;
 const t0 = performance.now();

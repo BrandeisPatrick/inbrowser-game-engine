@@ -12,8 +12,10 @@
 //   new DynamicsWorld({ gravity = [0, -9.81, 0], substeps = 4, maxBodies = 4096, maxContacts = 16384,
 //     maxJoints = 1024, sleep = { linear: 0.05, angular: 0.05, time: 0.5 } | false, physics = null, staticMask = -1,
 //     margin = 0.01, seed = 1, positionIterations = 1, velocityIterations = 1, broadphaseMargin = 0.1,
-//     staticProviders = true, timing = false })
+//     staticProviders = true, timing = false, maxParticles = 0, particleDamping = 0.01 })
 //       physics: the PhysicsWorld holding the static world; null means no static world at all, not even a ground.
+//       maxParticles > 0: the world owns `particles` (particles.js ParticleStore) and `constraints` (its
+//       ParticleConstraints, the built-in particle solver); 0 (default): both are null and step() is the 0.8.0 one.
 //       timing: fill stats.ms / msBroad / msNarrow / msSolve (performance.now(), narrowphase included); off, step()
 //       reads no timer.
 //   addBody({ type = 'dynamic' | 'static' | 'kinematic' (or the BODY.* number), shape, position = [0, 0, 0],
@@ -46,6 +48,12 @@
 //                                      joints (the JointStore). Jointed pairs do not collide unless the joint has
 //                                      collideConnected (JointStore.connected(a, b), when the JointStore has it)
 //   wake(id) (wakes its whole sleeping island); sleep(id) (that body alone); isAwake(id)
+//   recollidePairs(ids, count) -> contacts added   (from a solver / plugin beginStep only) collide the pairs among
+//                                      ids[0 .. count) that the joint filter skipped this step and are no longer
+//                                      connected (glue broken in beginStep), and set their contacts up (see the method)
+//   isActive(id)                       true when the body is integrated in the current / was in the last step (awake
+//                                      dynamic or moving kinematic: the active set of stage 1, plus the bodies woken by
+//                                      contacts in stage 2); particle solvers ask it instead of reading internals
 //   step(dt)                           fixed dt (the Engine's fixedDt), substeps inside; no allocation once warm
 //   raycast(origin, dir, maxDist = 1e4, opts = {}) -> { distance, point, normal, body, box, kind, ground } | null
 //       bodies (opts.bodies !== false; queries.raycastBodies: opts.mask vs body layers, opts.filter(id)) and, when
@@ -63,10 +71,11 @@
 //                                      (marked fn[DYN_RECORD] = true). Attach with it OR with bridge.js, not both
 //   getGroundHeight(x, z, y), surfaceAt(x, z, out)   passthrough to physics (0 / { mu: 1, crr: 1, tag: null } without)
 //   debugLines(out, max, opts?, colors?) -> count   (debug.js writeDebugLines)
-//   serialize() -> { version, desc, time, stepCount, bodies, shapes, joints, narrowphase, friction, events }
+//   serialize() -> { version, desc, time, stepCount, bodies, shapes, joints, narrowphase, friction, events
+//                    (, particles, solvers: [{ name, data }] when the world has particles) }
 //                                      typed-array copies (structured-clone friendly, e.g. postMessage, so userData
 //                                      must be structured-cloneable; a JSON round trip is accepted but loses -0, NaN
-//                                      and Infinity). DynamicsWorld.from(s, { physics }) rebuilds a world that
+//                                      and Infinity). DynamicsWorld.from(s, { physics, solvers }) rebuilds a world that
 //                                      continues bit-identically (shapes re-created from descriptors: describeShape /
 //                                      shapeFromDescriptor). The current began / ended lists are not carried (the
 //                                      touching-pair set is, so the next step's events are right)
@@ -74,7 +83,43 @@
 //   Fields: bodies, contacts (last step's contacts; lambdaN / lambdaT = normal / friction impulse over the step, N s),
 //   broadphase, narrowphase, joints, islands, physics, gravity (Float64Array(3)), substeps, positionIterations,
 //   velocityIterations, margin, staticMask, time, stepCount, stats (reused: bodies, awake, pairs, contacts, joints,
-//   islands, ms, msBroad, msNarrow, msSolve), began / ended ({ count, keys: Uint32Array } pair keys, see Events).
+//   islands, ms, msBroad, msNarrow, msSolve, particles, constraints), began / ended ({ count, keys: Uint32Array }
+//   pair keys, see Events); particles, constraints, particleSolvers, particleDamping (see Particles).
+//
+// Particles (0.9.0; particles.js). With maxParticles > 0:
+//   particles: ParticleStore (SoA pos / prevPos / vel / invMass / radius / mass / flags / group, PFLAG.PINNED /
+//     NO_GRAVITY); constraints: ParticleConstraints (distance / bending / attachment / tether / body tether), the
+//     built-in solver; Cloth.grid / Rope.chain build on both.
+//   addParticleSolver(solver) -> solver; removeParticleSolver(solver) -> bool; particleSolvers: the registered solvers
+//     in run order (insertion order; the built-in constraints are always index 0 and cannot be removed). A solver is
+//     { name: string (required: serialize / from match by it), beginStep(world, dt), solvePositions(world, h, it),
+//     solveVelocities(world, h, it), endStep(world, dt), serialize() -> plain | null, restore(data) }, every method
+//     but name optional, called with positional arguments (dt and h are the step's boxed numbers: read them, nothing is
+//     allocated per call; `it` is the 0-based position / velocity iteration index within the substep, so a solver that
+//     must act once per substep acts at it === 0; with velocityIterations 0 solveVelocities is never called). A world
+//     without particles (maxParticles 0) accepts solvers too, as plugins (e.g. coupling.js Buoyancy on rigid bodies
+//     alone): world.particles / world.constraints stay null and a plugin must tolerate that; the hooks run whenever
+//     the world has particles or at least one solver.
+//   particleAabb(group, out6) -> bool   AABB (minX minY minZ maxX maxY maxZ, radius included) of the alive particles
+//                                      of `group`; false (out6 untouched) when there are none
+//   The particles' place in step() (h = dt / substeps; `solvers` = particleSolvers in order; the solver calls happen
+//   when the world has particles or solvers, the particle integrate / velocity / damping only with particles):
+//     after stage 4 (contact setup): solvers.beginStep(world, dt)
+//     each substep: rigid integrate loop; particles integrate (prevPos = pos for every alive particle; alive and not
+//       PINNED: vel += h g unless NO_GRAVITY, pos += h vel); per position iteration it: contacts, joints,
+//       solvers.solvePositions(world, h, it) (it 0 resets lambdas, as the joints do); rigid velocityFromPositions;
+//       particles vel = (pos - prevPos) / h (alive, not pinned); per velocity iteration it: contacts, joints,
+//       solvers.solveVelocities(world, h, it); rigid damping, then particle damping vel *= max(0, 1 - particleDamping h)
+//     after stage 7: solvers.endStep(world, dt); stats.particles (alive) / stats.constraints (alive, built-in)
+//   serialize() adds `particles` (ParticleStore.serialize) and desc.maxParticles / particleDamping (with particles) and
+//   `solvers` ([{ name, data: serialize() or null }] in run order; with particles or plugins); from(s, { physics,
+//   solvers }) rebuilds the store and the built-in
+//   constraints bit-identically, then, in the snapshot's order, registers each instance of `solvers` whose `name`
+//   matches an entry and calls its restore(data); instances matching no entry are registered after them, entries with
+//   no instance are dropped, an instance listed twice (or the built-in) is registered once. A world with neither
+//   particles nor plugins steps and serializes exactly as 0.8.0 (no new keys).
+//   removeBody removes the attachments to the body. Particles never sleep; a body held by an attachment sleeps once it
+//   and the attached particle rest, and wakes when that particle moves or the attachment's force changes (particles.js).
 //
 // Step pipeline (step(dt), h = dt / substeps)
 //   1. kinematic targets: vel = (target - pos) / dt, angVel = axis * angle(target * conj(q)) / dt (detAtan2); a
@@ -95,7 +140,9 @@
 //      narrowphase call's contacts form a manifold (split into chunks of at most MAX_BLOCK = 8 points).
 //   4. contact setup: the contact point is split into the two surface points pA = p + n depth / 2, pB = p - n depth / 2
 //      (n from a to b), stored as body-frame anchors (b = WORLD_BODY: world point), so the separation is re-evaluated
-//      from the current poses in every substep: d = (pA - pB) . n > 0 is penetration; speculative contacts (depth < 0)
+//      from the current poses in every substep (0.9.0: the anchor of a body whose top-level shape is a sphere or a
+//      capsule is re-seated on its surface along n before every use, since a rolling contact is not a material point;
+//      compounds keep material anchors; see _reseat): d = (pA - pB) . n > 0 is penetration; speculative contacts (depth < 0)
 //      act only once the predicted motion closes them. Friction mu = sqrt(mu_a mu_b) (static world: mu_a),
 //      restitution max(e_a, e_b) (static world: e_a). Static-friction anchors come from the anchor cache (below).
 //   5. substeps: pre-solve normal velocities vn~ (relative anchor velocity along n, > 0 approaching); integrate
@@ -147,7 +194,8 @@
 // objects once warm (typed arrays, pooled records); the solver passes only integers between its functions (vectors
 // live in typed arrays: V8 would box a double crossing a non-inlined call), and h / g / static box bounds go to the
 // other modules as numbers boxed once. Growth on overflow (documented): the event sets and key lists, the candidate
-// index buffer, the static-box tables when boxes are added. What remains per step is V8 boxing inside other modules'
+// index buffer, the static-box tables when boxes are added, the joint-skipped pair list (sized for maxJoints pairs: a
+// pair is skipped at most once per step, so it only grows past more connected pairs than joints). What remains per step is V8 boxing inside other modules'
 // call interfaces (e.g. ContactBuffer.add from the narrowphase), short-lived and never retained. Timings in `stats`
 // use performance.now() and never feed the simulation.
 import { Vector3 } from 'three';
@@ -163,9 +211,11 @@ import { Islands } from './islands.js';
 import { raycastBodies, shapeCastBodies, overlapBodies, pointInBody } from './queries.js';
 import { writeDebugLines } from './debug.js';
 import { detachFromPhysicsWorld } from './bridge.js';
+import { ParticleStore, ParticleConstraints, PFLAG } from './particles.js';
 
 const STATIC = BODY.STATIC, KINEMATIC = BODY.KINEMATIC, DYNAMIC = BODY.DYNAMIC;
 const ASLEEP = FLAG.ASLEEP, NO_GRAVITY = FLAG.NO_GRAVITY;
+const P_PINNED = PFLAG.PINNED, P_NO_GRAVITY = PFLAG.NO_GRAVITY;
 const TYPE_OF = Object.freeze({ static: STATIC, kinematic: KINEMATIC, dynamic: DYNAMIC });
 const DEFAULT_SLEEP = Object.freeze({ linear: 0.05, angular: 0.05, time: 0.5 });
 const EMPTY_OPTS = Object.freeze({});
@@ -187,6 +237,7 @@ const _m9 = new Float64Array(9);   // inertia tensor
 const _r = new Float64Array(3);    // rotated vector
 const _va = new Float64Array(3);   // relative point velocity
 const _w3 = new Float64Array(3);   // world inverse inertia * vector
+const _sn = new Float64Array(3), _snb = new Float64Array(3);   // contact normal, world / body frame (_reseat)
 const _ro = new Vector3(), _rd = new Vector3();
 // manifold block solve scratch: up to MAX_BLOCK contact points + 3 friction rows (2 tangential + twist)
 const MAX_BLOCK = 8, MAX_ROWS = MAX_BLOCK + 3;
@@ -536,6 +587,8 @@ export class DynamicsWorld {
    * @param {boolean} [o.staticProviders=true] also collide with the PhysicsWorld's dynamic providers (traffic, ...)
    * @param {boolean} [o.timing=false]   fill stats.ms / msBroad / msNarrow / msSolve (performance.now(), also in the
    *   narrowphase); off, step() calls no timer at all
+   * @param {number} [o.maxParticles=0]   > 0: own a ParticleStore of that capacity + the built-in ParticleConstraints
+   * @param {number} [o.particleDamping=0.01]  1/s (clamped at 0), particle velocity damping per substep (vel *= 1 - d h)
    */
   constructor(o = {}) {
     const {
@@ -634,6 +687,22 @@ export class DynamicsWorld {
     /** Stable bound queryColliders (register it with physics.addDynamicProvider to publish the bodies). */
     this.colliderProvider = (x, z, r, out) => this.queryColliders(x, z, r, out);
     this.colliderProvider[DYN_RECORD] = true;      // marks a dynamics provider: never called back as static geometry
+    // particles (0.9.0): null / empty without maxParticles, and step() then never touches them
+    const { maxParticles = 0, particleDamping = 0.01 } = o;
+    this.maxParticles = maxParticles > 0 ? maxParticles | 0 : 0;
+    this.particleDamping = particleDamping > 0 ? particleDamping : 0;
+    /** @type {ParticleStore|null} */
+    this.particles = this.maxParticles > 0 ? new ParticleStore(this.maxParticles) : null;
+    /** @type {ParticleConstraints|null} */
+    this.constraints = this.particles !== null ? new ParticleConstraints(this.particles, Math.max(64, this.maxParticles * 8), this.bodies) : null;
+    /** @type {object[]} */
+    this.particleSolvers = this.constraints !== null ? [this.constraints] : [];
+    this._ptag = [0.5, null];                      // dt as a boxed number for the solver hooks (generic elements)
+    this._jskip = new Int32Array(2 * Math.max(32, maxJoints)); // (a, b) pairs the joint filter skipped this step (grows on overflow)
+    this._jskipCount = 0;
+    this._mark = new Uint8Array(maxBodies);        // recollidePairs body marker (cleared after each call)
+    this._inBeginStep = false;
+    this.stats.particles = 0; this.stats.constraints = 0;
   }
 
   // ---- bodies ------------------------------------------------------------------------------------------------------
@@ -718,6 +787,7 @@ export class DynamicsWorld {
     this._bpDirty = true;
     this._kinPending[id] = 0; this._kinMode[id] = 0; this._active[id] = 0; this._act0[id] = 0;
     this._desc[id] = null; this._kind[id] = 'rigid';
+    if (this.constraints !== null) this.constraints.detachBody(id); // particle attachments to it
     B.free(id);
     this.islands.reset(id);
   }
@@ -897,6 +967,8 @@ export class DynamicsWorld {
   sleep(id) { this.islands.sleepBody(this.bodies, id); }
   /** True when the body is alive and not asleep. */
   isAwake(id) { const B = this.bodies; return id >= 0 && id < B.count && B.alive[id] === 1 && (B.flags[id] & ASLEEP) === 0; }
+  /** True when the body is integrated this step (during a step) / was in the last one (between steps): see the header. */
+  isActive(id) { const B = this.bodies; return id >= 0 && id < B.count && B.alive[id] === 1 && this._active[id] === 1; }
 
   // wake every body that touched `id` in the last step (the touching-pair set also holds sleeping pairs, which
   // produce no contacts)
@@ -944,6 +1016,7 @@ export class DynamicsWorld {
     np.beginStep();
     C.clear();
     this._mfCount = 0;
+    this._jskipCount = 0;                       // pairs the joint filter skipped this step (recollidePairs)
     for (let id = 0; id < n; id++) act0[id] = act[id];
     this._collidePairs(false);
     let scanned = 0;
@@ -968,6 +1041,9 @@ export class DynamicsWorld {
 
     // 4. contact setup
     this._setupContacts();
+    const PS = this.particles;                  // null: no particle integration
+    const SV = PS !== null || this.particleSolvers.length > 0; // solver hooks (neither: the 0.8.0 step)
+    if (SV) { this._ptag[0] = dt; this._beginParticleStep(); }
 
     // 5. substeps
     const ns = this.substeps, h = dt / ns, cc = C.count;
@@ -993,17 +1069,22 @@ export class DynamicsWorld {
           else integrateBody(B, id, tg[0], tg[1], tg[2], tg[3]);
         } else this._integrateKinematic(id, last);
       }
+      if (PS !== null) this._integrateParticles();
       for (let it = 0; it < this.positionIterations; it++) {
         this._solveContactPositions();
         if (hasJoints) solveJointsPositions(J, B, tg[0], it);   // it 0 resets the joint lambdas
+        if (SV) this._solveParticlePositions(it);
       }
       for (let id = 0; id < n; id++) if (act[id] && type[id] === DYNAMIC) velocityFromPositions(B, id, tg[0]);
+      if (PS !== null) this._particleVelocities();
       for (let i = 0; i < cc; i++) { impN[i] += lamN[i] / h; impT[i] += lamT[i] / h; }
       for (let it = 0; it < this.velocityIterations; it++) {
         this._solveContactVelocities();
         if (hasJoints) solveJointsVelocities(J, B, tg[0]);
+        if (SV) this._solveParticleVelocities(it);
       }
       this._damp();
+      if (PS !== null) this._dampParticles();
     }
 
     // 6. contact impulses -> narrowphase, static-friction anchors -> cache
@@ -1031,6 +1112,107 @@ export class DynamicsWorld {
     for (let j = 0; j < J.count; j++) if (J.alive[j]) joints++;
     st.bodies = bodies; st.awake = awake; st.pairs = bp.pairCount; st.contacts = C.count; st.joints = joints;
     st.msBroad = msBroad; st.msNarrow = msNarrow; st.msSolve = msSolve; st.ms = timing ? performance.now() - t0 : 0;
+    if (SV) this._endParticleStep();
+    if (PS !== null) { st.particles = PS.size; st.constraints = this.constraints.size; }
+  }
+
+  // ---- particles (particles.js; see "Particles" in the header) -----------------------------------------------------
+  // The hooks pass only integers and the step's boxed numbers (this._ptag[0] = dt, this._tagged[0] = h) to the solvers,
+  // and read h / g from fields and typed arrays, so nothing is boxed per call.
+
+  /**
+   * Register a particle solver / plugin (run after the solvers already registered). A world without particles accepts
+   * plugins too (world.particles / constraints stay null: the plugin must tolerate that).
+   * @param {object} solver  { name, beginStep?, solvePositions?, solveVelocities?, endStep?, serialize?, restore? }
+   * @returns {object} the solver
+   */
+  addParticleSolver(solver) {
+    if (!solver || typeof solver !== 'object') throw new TypeError('DynamicsWorld.addParticleSolver: a solver object is required');
+    if (typeof solver.name !== 'string') throw new TypeError('DynamicsWorld.addParticleSolver: a solver needs a string `name` (serialize / from match solvers by it)');
+    if (this.particleSolvers.includes(solver)) throw new RangeError('DynamicsWorld.addParticleSolver: solver already registered');
+    this.particleSolvers.push(solver);
+    return solver;
+  }
+  /** Unregister a particle solver (not the built-in constraints). Returns whether it was registered. */
+  removeParticleSolver(solver) {
+    if (solver !== null && solver === this.constraints) throw new RangeError('DynamicsWorld.removeParticleSolver: the built-in constraints solver cannot be removed');
+    const k = this.particleSolvers.indexOf(solver);
+    if (k < 0) return false;
+    this.particleSolvers.splice(k, 1);
+    return true;
+  }
+  /**
+   * AABB of the alive particles of `group`, radius included, into out6 (minX, minY, minZ, maxX, maxY, maxZ).
+   * @returns {boolean} false (out6 untouched) when the group has no alive particle
+   */
+  particleAabb(group, out6) {
+    const P = this.particles;
+    if (P === null) return false;
+    const n = P.count, alive = P.alive, grp = P.group, x = P.pos, rad = P.radius;
+    let found = false, x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+    for (let i = 0; i < n; i++) {
+      if (alive[i] === 0 || grp[i] !== group) continue;
+      const i3 = i * 3, r = rad[i], px = x[i3], py = x[i3 + 1], pz = x[i3 + 2];
+      if (!found) { found = true; x0 = px - r; y0 = py - r; z0 = pz - r; x1 = px + r; y1 = py + r; z1 = pz + r; continue; }
+      if (px - r < x0) x0 = px - r; if (py - r < y0) y0 = py - r; if (pz - r < z0) z0 = pz - r;
+      if (px + r > x1) x1 = px + r; if (py + r > y1) y1 = py + r; if (pz + r > z1) z1 = pz + r;
+    }
+    if (!found) return false;
+    out6[0] = x0; out6[1] = y0; out6[2] = z0; out6[3] = x1; out6[4] = y1; out6[5] = z1;
+    return true;
+  }
+  _beginParticleStep() {
+    const sv = this.particleSolvers, tp = this._ptag;
+    this._inBeginStep = true;                    // recollidePairs is legal only here
+    try {
+      for (let k = 0; k < sv.length; k++) { const s = sv[k]; if (typeof s.beginStep === 'function') s.beginStep(this, tp[0]); }
+    } finally { this._inBeginStep = false; }
+  }
+  _solveParticlePositions(it) {
+    const sv = this.particleSolvers, tg = this._tagged;
+    for (let k = 0; k < sv.length; k++) { const s = sv[k]; if (typeof s.solvePositions === 'function') s.solvePositions(this, tg[0], it); }
+  }
+  _solveParticleVelocities(it) {
+    const sv = this.particleSolvers, tg = this._tagged;
+    for (let k = 0; k < sv.length; k++) { const s = sv[k]; if (typeof s.solveVelocities === 'function') s.solveVelocities(this, tg[0], it); }
+  }
+  _endParticleStep() {
+    const sv = this.particleSolvers, tp = this._ptag;
+    for (let k = 0; k < sv.length; k++) { const s = sv[k]; if (typeof s.endStep === 'function') s.endStep(this, tp[0]); }
+  }
+  // prevPos = pos (every alive particle); alive and not pinned: vel += h g (unless NO_GRAVITY), pos += h vel
+  _integrateParticles() {
+    const P = this.particles, n = P.count, alive = P.alive, flags = P.flags, x = P.pos, x0 = P.prevPos, v = P.vel;
+    const h = this._h, g = this.gravity, hgx = h * g[0], hgy = h * g[1], hgz = h * g[2];
+    for (let i = 0; i < n; i++) {
+      if (alive[i] === 0) continue;
+      const i3 = i * 3, f = flags[i];
+      x0[i3] = x[i3]; x0[i3 + 1] = x[i3 + 1]; x0[i3 + 2] = x[i3 + 2];
+      if ((f & P_PINNED) !== 0) continue;
+      if ((f & P_NO_GRAVITY) === 0) { v[i3] += hgx; v[i3 + 1] += hgy; v[i3 + 2] += hgz; }
+      x[i3] += h * v[i3]; x[i3 + 1] += h * v[i3 + 1]; x[i3 + 2] += h * v[i3 + 2];
+    }
+  }
+  // vel = (pos - prevPos) / h for alive, non-pinned particles
+  _particleVelocities() {
+    const P = this.particles, n = P.count, alive = P.alive, flags = P.flags, x = P.pos, x0 = P.prevPos, v = P.vel, h = this._h;
+    for (let i = 0; i < n; i++) {
+      if (alive[i] === 0 || (flags[i] & P_PINNED) !== 0) continue;
+      const i3 = i * 3;
+      v[i3] = (x[i3] - x0[i3]) / h; v[i3 + 1] = (x[i3 + 1] - x0[i3 + 1]) / h; v[i3 + 2] = (x[i3 + 2] - x0[i3 + 2]) / h;
+    }
+  }
+  // vel *= max(0, 1 - particleDamping h) for alive, non-pinned particles
+  _dampParticles() {
+    let k = 1 - this.particleDamping * this._h;
+    if (k < 0) k = 0;
+    if (k === 1) return;
+    const P = this.particles, n = P.count, alive = P.alive, flags = P.flags, v = P.vel;
+    for (let i = 0; i < n; i++) {
+      if (alive[i] === 0 || (flags[i] & P_PINNED) !== 0) continue;
+      const i3 = i * 3;
+      v[i3] *= k; v[i3 + 1] *= k; v[i3 + 2] *= k;
+    }
   }
 
   // implied velocity of a kinematic target
@@ -1111,11 +1293,54 @@ export class DynamicsWorld {
       const key = pairs[k], a = pairA(key), b = pairB(key);
       if (fresh) { if (act0[a] || act0[b] || (!act[a] && !act[b])) continue; }
       else if (!act[a] && !act[b]) continue;
-      if (jc && J.connected(a, b)) continue;        // jointed pair without collideConnected
+      if (jc && J.connected(a, b)) {                // jointed pair without collideConnected: skipped, remembered
+        let js = this._jskip, q = this._jskipCount * 2;
+        if (q + 2 > js.length) { const g = new Int32Array(js.length * 2); g.set(js); js = this._jskip = g; } // growth
+        js[q] = a; js[q + 1] = b; this._jskipCount++;
+        continue;
+      }
       const before = C.count;
       np.collide(B, a, b, C);
       if (C.count > before) this._addManifold(before);
     }
+  }
+
+  /**
+   * From a particle solver / plugin's beginStep only (else it throws): collide this step's broadphase pairs (a, b)
+   * whose bodies are both in ids[0 .. count) and that the joint filter skipped earlier in the step but are no longer
+   * connected (a glue joint broken in beginStep), in ascending pair key, appending their contacts and setting them up
+   * like stage 4 (manifolds continue from the current count), so freed pieces touch in the very step they are freed.
+   * Pairs with a sleeping dynamic body, pairs already re-collided this step and still-connected pairs are left out.
+   * Allocation-free (a body marker array, cleared after). Returns the number of contacts added (0: nothing changed).
+   * @param {Int32Array|number[]} ids  body ids (caller-owned)
+   * @param {number} count  how many of ids to use
+   * @returns {number}
+   */
+  recollidePairs(ids, count) {
+    if (!this._inBeginStep) throw new Error('DynamicsWorld.recollidePairs: only callable from a particle solver / plugin beginStep');
+    if (!(count > 0) || this._jskipCount === 0) return 0;
+    const J = this.joints;
+    if (typeof J.connected !== 'function') return 0;
+    const B = this.bodies, C = this.contacts, np = this.narrowphase, bp = this.broadphase, mark = this._mark, act = this._active;
+    const n = B.count, type = B.type, flags = B.flags, js = this._jskip, nj = this._jskipCount;
+    for (let q = 0; q < count; q++) { const id = ids[q]; if (id >= 0 && id < n) mark[id] = 1; }
+    const start = C.count, mf0 = this._mfCount, pairs = bp.pairs, pc = bp.pairCount;
+    for (let k = 0; k < pc; k++) {
+      const key = pairs[k], a = pairA(key), b = pairB(key);
+      if (mark[a] === 0 || mark[b] === 0 || (!act[a] && !act[b])) continue;
+      if ((type[a] === DYNAMIC && (flags[a] & ASLEEP) !== 0) || (type[b] === DYNAMIC && (flags[b] & ASLEEP) !== 0)) continue;
+      if (J.connected(a, b)) continue;
+      let s = -1;
+      for (let q = 0; q < nj; q++) if (js[q * 2] === a && js[q * 2 + 1] === b) { s = q; break; }
+      if (s < 0) continue;                          // collided normally (not joint-skipped) or already re-collided
+      js[s * 2] = -1;
+      const before = C.count;
+      np.collide(B, a, b, C);
+      if (C.count > before) this._addManifold(before);
+    }
+    for (let q = 0; q < count; q++) { const id = ids[q]; if (id >= 0 && id < n) mark[id] = 0; }
+    if (C.count > start) this._setupContacts(start, mf0);
+    return C.count - start;
   }
 
   // Wake the sleeping bodies reached by contacts[from ..); returns the number of bodies woken.
@@ -1251,11 +1476,12 @@ export class DynamicsWorld {
   }
 
   // anchors, friction and restitution of this step's contacts
-  _setupContacts() {
+  // contacts [start, count) and manifolds [mf0, _mfCount) (recollidePairs sets up only what it appended)
+  _setupContacts(start = 0, mf0 = 0) {
     const B = this.bodies, C = this.contacts, P = B.pos, Q = B.quat, la = this._la, lb = this._lb;
     const fr = B.friction, re = B.restitution, mu = this._mu, e = this._e, fa = this._fa, fb = this._fb, fc = this._frictionCache;
     const noA = this._noAnchors;
-    for (let i = 0; i < C.count; i++) {
+    for (let i = start; i < C.count; i++) {
       const a = C.a[i], b = C.b[i], i3 = i * 3;
       const nx = C.nx[i], ny = C.ny[i], nz = C.nz[i], hd = 0.5 * C.depth[i];
       const px = C.px[i], py = C.py[i], pz = C.pz[i];
@@ -1280,7 +1506,7 @@ export class DynamicsWorld {
       else { fa[i3] = la[i3]; fa[i3 + 1] = la[i3 + 1]; fa[i3 + 2] = la[i3 + 2]; fb[i3] = lb[i3]; fb[i3 + 1] = lb[i3 + 1]; fb[i3 + 2] = lb[i3 + 2]; }
     }
     this._mfStart[this._mfCount] = C.count;
-    this._mfStick.fill(0, 0, this._mfCount);
+    this._mfStick.fill(0, mf0, this._mfCount);
   }
 
   // remember the anchors of the manifolds that stuck in their latest solve (for the next step's static friction)
@@ -1318,6 +1544,8 @@ export class DynamicsWorld {
   _levers(i, c) {
     const B = this.bodies, C = this.contacts, P = B.pos, Q = B.quat, lb = this._lb;
     const a = C.a[i], b = C.b[i], i3 = i * 3, a3 = a * 3, c3 = c * 3;
+    this._reseat(i, a, this._la, 1);
+    if (b >= 0) this._reseat(i, b, lb, -1);
     rotQ(Q, a * 4, this._la, i3, _bra, c3);
     let pbx, pby, pbz;
     if (b >= 0) {
@@ -1329,6 +1557,40 @@ export class DynamicsWorld {
       pbx = lb[i3]; pby = lb[i3 + 1]; pbz = lb[i3 + 2];
     }
     _bd[c] = (P[a3] + _bra[c3] - pbx) * C.nx[i] + (P[a3 + 1] + _bra[c3 + 1] - pby) * C.ny[i] + (P[a3 + 2] + _bra[c3 + 2] - pbz) * C.nz[i];
+  }
+
+  // Curved shapes (sphere, capsule): their contact point is not a material point. A body-frame anchor carried along by
+  // the rotation would sit r sin(theta) behind the geometric contact after rolling by theta, and every normal impulse
+  // would then torque the body along its roll (0.6 -> 3.4 rad/s in 5 s for a 0.3 m sphere, 44.6 for a lying 0.05 m
+  // capsule; 0.6.0 / 0.8.0 behaviour). So the anchor of contact i on body id (L = _la with sign +1: the surface toward
+  // n; L = _lb with sign -1) is re-seated from the current pose before every use: axis point (the centre; a capsule's
+  // segment point at the anchor's axial coordinate, clamped to +-halfHeight) + R^T n * its distance from that point
+  // (a capsule's cylinder point along n without its axial part). Only a body whose TOP-LEVEL shape is a sphere or a
+  // capsule is re-seated: a compound of spheres / capsules keeps the material anchors of 0.8.0.
+  // The static-friction anchors (_fa / _fb) stay material points, which is right for rolling. Integers only cross.
+  _reseat(i, id, L, sign) {
+    const s = this.bodies.shape[id];
+    if (s === null || (s.type !== SHAPE.SPHERE && s.type !== SHAPE.CAPSULE)) return;
+    const C = this.contacts, i3 = i * 3;
+    _sn[0] = C.nx[i]; _sn[1] = C.ny[i]; _sn[2] = C.nz[i];
+    invRotQ(this.bodies.quat, id * 4, _sn, 0, _snb, 0);
+    let ay = 0, nx = _snb[0], ny = _snb[1], nz = _snb[2];
+    if (s.type === SHAPE.CAPSULE) {
+      // a cap point re-seats along the full n (the cap is a sphere); a cylinder point along n's component perpendicular
+      // to the axis, so its axial coordinate is a fixed point (re-seating along the full n would march it to a cap)
+      const hh = s.halfHeight, y = L[i3 + 1];
+      if (y >= hh) ay = hh;
+      else if (y <= -hh) ay = -hh;
+      else {
+        ay = y;
+        const p = Math.sqrt(nx * nx + nz * nz);
+        if (!(p > 1e-9)) return;                     // n along the axis: no radial direction, keep the anchor
+        nx /= p; ny = 0; nz /= p;
+      }
+    }
+    const dx = L[i3], dy = L[i3 + 1] - ay, dz = L[i3 + 2];
+    const len = sign * Math.sqrt(dx * dx + dy * dy + dz * dz);
+    L[i3] = nx * len; L[i3 + 1] = ay + ny * len; L[i3 + 2] = nz * len;
   }
 
   // velocity of a's anchor minus b's anchor (levers of point slot c) -> _va
@@ -1847,7 +2109,7 @@ export class DynamicsWorld {
     const joints = typeof J.serialize === 'function' ? J.serialize() : snapshotFields(J);
     const np = this.narrowphase;
     const p = this._prevPairs;
-    return {
+    const out = {
       version: SERIAL_VERSION,
       desc: {
         gravity: Array.from(this.gravity), substeps: this.substeps, maxBodies: this.maxBodies, maxContacts: this.maxContacts,
@@ -1861,12 +2123,22 @@ export class DynamicsWorld {
       friction: this._frictionCache.serialize(),
       events: { keys: p.keys.slice(0, p.count), a: p.ida.slice(0, p.count), b: p.idb.slice(0, p.count) },
     };
+    if (this.particles !== null) {                 // a world without particles or plugins serializes exactly as 0.8.0
+      out.desc.maxParticles = this.maxParticles;
+      out.desc.particleDamping = this.particleDamping;
+      out.particles = this.particles.serialize();
+    }
+    if (this.particles !== null || this.particleSolvers.length > 0) {
+      out.solvers = this.particleSolvers.map((sv) => ({ name: sv.name, data: typeof sv.serialize === 'function' ? sv.serialize() : null }));
+    }
+    return out;
   }
 
   /**
    * Rebuild a world from serialize()'s snapshot.
    * @param {object} s
-   * @param {{ physics?: object }} [o]  the static world (not part of the snapshot)
+   * @param {{ physics?: object, solvers?: object[] }} [o]  the static world (not part of the snapshot); particle
+   *   solver instances to register and restore by `name` (see "Particles" in the header)
    */
   static from(s, o = {}) {
     if (!s || !s.desc || !s.bodies) throw new TypeError('DynamicsWorld.from: not a serialized world');
@@ -1904,8 +2176,31 @@ export class DynamicsWorld {
     }
     w.time = s.time || 0;
     w.stepCount = s.stepCount || 0;
+    const given = o.solvers || [];
+    if (s.particles && w.particles !== null) w.particles.restore(s.particles);
+    if (s.solvers || given.length) w._restoreSolvers(s.solvers || [], given);
     return w;
   }
+
+  // solvers of a snapshot: the built-in constraints (worlds with particles), then the given instances in the snapshot's
+  // order, then the given instances that match no entry
+  _restoreSolvers(entries, given) {
+    const used = new Uint8Array(given.length);
+    for (let e = 0; e < entries.length; e++) {
+      const en = entries[e];
+      if (!en) continue;
+      if (e === 0 && this.constraints !== null && en.name === this.constraints.name) { if (en.data) this.constraints.restore(en.data); continue; }
+      let k = -1;
+      for (let q = 0; q < given.length; q++) if (!used[q] && this._newSolver(given[q]) && given[q].name === en.name) { k = q; break; }
+      if (k < 0) continue;
+      used[k] = 1;
+      this.addParticleSolver(given[k]);
+      if (typeof given[k].restore === 'function') given[k].restore(en.data ?? null);
+    }
+    for (let q = 0; q < given.length; q++) if (!used[q] && this._newSolver(given[q])) this.addParticleSolver(given[q]);
+  }
+  // a solver object not registered yet (the built-in one, repeats and non-objects are skipped)
+  _newSolver(sv) { return !!sv && typeof sv === 'object' && !this.particleSolvers.includes(sv); }
 
   /** Release references (removes colliderProvider and a bridge.js provider of this world from the PhysicsWorld). */
   dispose() {
@@ -1919,5 +2214,6 @@ export class DynamicsWorld {
     this.bodies.shape.fill(null); this.bodies.userData.fill(null);
     this._records.fill(null); this._desc.fill(null); this._statics.length = 0; this._staticIdx.clear();
     this._staticTagged.length = 0; this._staticGrid = null; this._sqn.fill(-1);
+    this.particleSolvers.length = this.constraints !== null ? 1 : 0; // drop the user solvers / plugins
   }
 }

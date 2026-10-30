@@ -1,11 +1,15 @@
 // Character visuals for the character sample: a procedural skinned humanoid with four generated clips (no assets
 // needed), and the mapping of a loaded glTF (RobotExpressive or any rigged model) onto the clip names the sample's
 // AnimationController states use. Both face +Z (the glTF convention) with their feet at y = 0.
-//   buildProceduralCharacter({ height = 1.8, color, accent }) -> { root, skinnedMesh, skeleton, clips, headBone }
-//   mapGltfCharacter(gltf, { height = 1.8 })                 -> { root, clips, headBone, scale }
-// The procedural rig: 15 THREE.Bones (hips, spine, chest, neck, head, upper / lower arms, upper / lower legs, feet),
-// one merged SkinnedMesh of capsule / sphere / box segments (each 100 % weighted to its bone, vertex coloured, one
-// draw), and QuaternionKeyframeTracks (plus a hips position track for the bob) built by sampling pose functions.
+//   buildProceduralCharacter({ height = 1.8, color, accent }) -> { root, skinnedMesh, skeleton, clips, headBone, arms }
+//   mapGltfCharacter(gltf, { height = 1.8 })                 -> { root, skinnedMesh, clips, headBone, arms, scale }
+//   findArmChain(root, 'L' | 'R') -> { upper, lower, end } | null   (procedural, RobotExpressive, mixamo names)
+//   captureRestPose(root) -> { restore() }   every bone's local position / quaternion / scale as it is now
+// The procedural rig: 15 animated THREE.Bones (hips, spine, chest, neck, head, upper / lower arms, upper / lower legs,
+// feet) + 2 hand leaves (handL / handR under the lower arms, no weights, no tracks: end bones for the arm IK), one
+// merged SkinnedMesh of capsule / sphere / box segments (each 100 % weighted to its bone, vertex coloured, one draw),
+// and QuaternionKeyframeTracks (plus a hips position track for the bob) built by sampling pose functions. `arms`:
+// findArmChain for 'L' and 'R' (the character's own left / right; null when a model has no such chain).
 // Conventions (character space, faces +Z, its left side is +X): a bone's local -X rotation swings a hanging limb
 // forward, +X bends a knee, -X bends an elbow forward, +X leans the spine forward, -X tips the head up.
 import * as THREE from 'three';
@@ -33,9 +37,16 @@ const JOINTS = [
   ['lowerLegR', 'upperLegR', [-0.1, 0.49, 0]],
   ['footR', 'lowerLegR', [-0.1, 0.08, 0]],
 ];
+// leaf bones after the animated ones (skin indices and clip tracks only cover JOINTS): the hands, at the hand balls'
+// centres, so TwoBoneIK has an end bone below each lower arm
+const LEAF_JOINTS = [
+  ['handL', 'lowerArmL', [0.25, 0.85, 0]],
+  ['handR', 'lowerArmR', [-0.25, 0.85, 0]],
+];
+const SKELETON = JOINTS.concat(LEAF_JOINTS);
 const BONES = JOINTS.map((j) => j[0]);
 const BONE_INDEX = Object.fromEntries(BONES.map((n, i) => [n, i]));
-const JOINT_POS = Object.fromEntries(JOINTS.map((j) => [j[0], j[2]]));
+const JOINT_POS = Object.fromEntries(SKELETON.map((j) => [j[0], j[2]]));
 const HIPS_Y = JOINT_POS.hips[1];
 
 // ------------------------------------------------------------------ geometry
@@ -205,14 +216,15 @@ export function proceduralClips(height = 1.8) {
 
 /**
  * Stylised procedural humanoid. color: suit colour, accent: chest stripe + shoes.
- * @returns {{ root: THREE.Group, skinnedMesh: THREE.SkinnedMesh, skeleton: THREE.Skeleton, clips: THREE.AnimationClip[], headBone: THREE.Bone }}
+ * @returns {{ root: THREE.Group, skinnedMesh: THREE.SkinnedMesh, skeleton: THREE.Skeleton, clips: THREE.AnimationClip[],
+ *   headBone: THREE.Bone, arms: { L: ArmChain | null, R: ArmChain | null } }}
  */
 export function buildProceduralCharacter({ height = 1.8, color = '#e4e7ec', accent = '#2fd4bd' } = {}) {
   const s = height / 1.8;
   const geometry = bodyGeometry(color, accent);
   if (s !== 1) geometry.scale(s, s, s);
   const bones = [], byName = {};
-  for (const [name, parent, p] of JOINTS) {
+  for (const [name, parent, p] of SKELETON) {
     const b = new THREE.Bone(); b.name = name;
     const pp = parent ? JOINT_POS[parent] : [0, 0, 0];
     b.position.set((p[0] - pp[0]) * s, (p[1] - pp[1]) * s, (p[2] - pp[2]) * s);
@@ -229,7 +241,7 @@ export function buildProceduralCharacter({ height = 1.8, color = '#e4e7ec', acce
   skinnedMesh.frustumCulled = false; // the bind-pose bounds do not cover the animated limbs
   const root = new THREE.Group(); root.name = 'character';
   root.add(skinnedMesh);
-  return { root, skinnedMesh, skeleton, clips: proceduralClips(height), headBone: byName.head };
+  return { root, skinnedMesh, skeleton, clips: proceduralClips(height), headBone: byName.head, arms: { L: findArmChain(root, 'L'), R: findArmChain(root, 'R') } };
 }
 
 // ------------------------------------------------------------------ glTF characters
@@ -240,6 +252,57 @@ function pickClip(src, name, key) {
   const lc = (c) => c.name.toLowerCase();
   return src.find((c) => c.name === name) || src.find((c) => lc(c) === key) || src.find((c) => lc(c).startsWith(key))
     || src.find((c) => lc(c).includes(key)) || null;
+}
+
+/**
+ * @typedef {{ upper: THREE.Object3D, lower: THREE.Object3D, end: THREE.Object3D }} ArmChain
+ */
+// normalised bone names (lower case, alphanumerics only, a mixamo prefix dropped) per side: upper arm, forearm, hand
+const ARM_NAMES = {
+  L: [['upperarml', 'leftarm', 'leftupperarm', 'upperarmleft', 'arml'], ['lowerarml', 'leftforearm', 'forearml', 'leftlowerarm', 'lowerarmleft'],
+    ['handl', 'lefthand', 'handleft', 'palm2l', 'wristl']],
+  R: [['upperarmr', 'rightarm', 'rightupperarm', 'upperarmright', 'armr'], ['lowerarmr', 'rightforearm', 'forearmr', 'rightlowerarm', 'lowerarmright'],
+    ['handr', 'righthand', 'handright', 'palm2r', 'wristr']],
+};
+const normName = (n) => n.toLowerCase().replace(/^mixamorig[^a-z]*/, '').replace(/[^a-z0-9]/g, '');
+
+/**
+ * Upper arm / forearm / hand bones of one side ('L' | 'R': the character's own left / right) by name: the procedural
+ * rig (upperArmL / lowerArmL / handL), RobotExpressive (UpperArm.L / LowerArm.L / Palm2.L, the middle palm: it has
+ * no hand bone) and mixamo (LeftArm / LeftForeArm / LeftHand). null unless lower descends from upper and end from lower.
+ * @returns {ArmChain | null}
+ */
+export function findArmChain(root, side) {
+  const names = ARM_NAMES[side];
+  if (!names) return null;
+  const found = [null, null, null], rank = [Infinity, Infinity, Infinity];
+  root.traverse((o) => {
+    if (!o.isBone) return;
+    const n = normName(o.name);
+    for (let k = 0; k < 3; k++) {
+      const i = names[k].indexOf(n);
+      if (i >= 0 && i < rank[k]) { rank[k] = i; found[k] = o; }
+    }
+  });
+  const [upper, lower, end] = found;
+  const descends = (c, a) => { for (let o = c && c.parent; o; o = o.parent) if (o === a) return true; return false; };
+  return upper && lower && end && descends(lower, upper) && descends(end, lower) ? { upper, lower, end } : null;
+}
+
+/**
+ * Snapshot of every bone's local position / quaternion / scale under root; restore() writes them back (after a
+ * ragdoll drove the bones, so channels no clip animates do not keep the ragdoll's values). Allocates once.
+ */
+export function captureRestPose(root) {
+  const bones = [];
+  root.traverse((o) => { if (o.isBone) bones.push(o); });
+  const pos = bones.map((b) => b.position.clone()), quat = bones.map((b) => b.quaternion.clone()), scl = bones.map((b) => b.scale.clone());
+  return {
+    bones,
+    restore() {
+      for (let i = 0; i < bones.length; i++) { const b = bones[i]; b.position.copy(pos[i]); b.quaternion.copy(quat[i]); b.scale.copy(scl[i]); }
+    },
+  };
 }
 
 /** First bone named like a head (not an `_end` leaf), or null. */
@@ -254,6 +317,7 @@ export function findHeadBone(root) {
  * states expect (CLIP_NAMES). RobotExpressive matches by name (Idle, Walking, Running, Jump); other models map by
  * case-insensitive 'idle' / 'walk' / 'run' / 'jump' and fall back to the first clip. The model is instanced (its own
  * skeleton), normalised to `height` with its feet at y = 0 inside the returned root group, and set to cast shadows.
+ * skinnedMesh: the first SkinnedMesh (null if none); arms: findArmChain per side.
  */
 export function mapGltfCharacter(gltf, { height = 1.8 } = {}) {
   let model = typeof gltf.instantiate === 'function' ? gltf.instantiate() : null;
@@ -284,5 +348,7 @@ export function mapGltfCharacter(gltf, { height = 1.8 } = {}) {
   fit.scale.setScalar(scale);
   fit.position.set(-(box.min.x + box.max.x) / 2 * scale, -box.min.y * scale, -(box.min.z + box.max.z) / 2 * scale);
   fit.add(model); root.add(fit);
-  return { root, clips, headBone: findHeadBone(model), scale };
+  let skinnedMesh = null;
+  model.traverse((o) => { if (!skinnedMesh && o.isSkinnedMesh) skinnedMesh = o; });
+  return { root, skinnedMesh, clips, headBone: findHeadBone(model), arms: { L: findArmChain(model, 'L'), R: findArmChain(model, 'R') }, scale };
 }

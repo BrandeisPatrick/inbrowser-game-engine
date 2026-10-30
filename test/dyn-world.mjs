@@ -466,6 +466,59 @@ for (const mu of [0.6, 0.2]) {
   if (!gc) note('no gc available: retained heap growth measured without gc');
 }
 
+// --- 15. rolling: a sphere and a lying capsule rolling on flat ground keep (not gain) their spin ---------------------
+// (0.9.0 fix: curved shapes re-seat their contact anchor every pass; 0.6.0 - 0.8.0 carried it along as a material point
+// and every normal impulse spun the body up: |w| 0.6 -> 3.4 (sphere r 0.3) / 44.6 (capsule r 0.05) in 5 s at mu 0)
+{
+  const S2 = Math.SQRT1_2;
+  const roll = (shape, q, r, mu) => {
+    const w = new DynamicsWorld({ physics: new PhysicsWorld({ groundLevel: 0 }), sleep: false });
+    const id = w.addBody({ shape, position: [0, r, 0], quaternion: q, friction: mu, mass: 1 });
+    w.setVelocity(id, 0, 0, 0.6 * r, 0.6, 0, 0);       // rolling about +x along +z: v = w r
+    const W = w.bodies.angVel, V = w.bodies.vel;
+    let prev = 0.6, inc = 0;
+    run(w, 5, () => { const m = Math.hypot(W[id * 3], W[id * 3 + 1], W[id * 3 + 2]); if (m - prev > inc) inc = m - prev; prev = m; });
+    const wm = Math.hypot(W[id * 3], W[id * 3 + 1], W[id * 3 + 2]), vm = Math.hypot(V[id * 3], V[id * 3 + 1], V[id * 3 + 2]);
+    return { inc, wm, ratio: vm / (wm * r) };
+  };
+  for (const [label, shape, q, r] of [['sphere r 0.3', sphere(0.3), null, 0.3], ['lying capsule r 0.05', capsule(0.05, 0.2), [0, 0, -S2, S2], 0.05]]) {
+    const f = roll(shape, q, r, 0), g = roll(shape, q, r, 0.6);
+    check(`rolling ${label}, mu 0: |w| never increases (max step increase)`, f.inc, 0, 0, 'rad/s');
+    check(`rolling ${label}, mu 0: |w| after 5 s (angular damping only)`, f.wm, 0.46, 0.48, 'rad/s');
+    check(`rolling ${label}, mu 0.6: |w| never increases (max step increase)`, g.inc, 0, 0, 'rad/s');
+    check(`rolling ${label}, mu 0.6: rolls without slip (|v| / (|w| r) after 5 s)`, g.ratio, 1 - 1e-3, 1 + 1e-3);
+  }
+  // a sphere rolling down a 10 deg slope (a static rotated box) accelerates at 5/7 g sin(theta) (0.8.0: 1.316 m/s^2)
+  const th = 10 * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), r = 0.3;
+  const ws = new DynamicsWorld({ sleep: false });
+  ws.addBody({ type: 'static', shape: box(5, 0.5, 2), quaternion: [0, 0, Math.sin(th / 2), Math.cos(th / 2)], friction: 0.6 });
+  const sp = ws.addBody({ shape: sphere(r), position: [2 * c - 0.5 * sn - r * sn, 2 * sn + 0.5 * c + r * c, 0], friction: 0.6, linearDamping: 0, angularDamping: 0 });
+  const V = ws.bodies.vel, along = () => -(V[sp * 3] * c + V[sp * 3 + 1] * sn);   // down-slope speed
+  let v1 = 0, v2 = 0;
+  run(ws, 1.5, (i) => { if (i === 60) v1 = along(); if (i === 180 - 1) v2 = along(); });
+  const acc = (v2 - v1) / (119 * DT), aRef = 5 / 7 * 9.81 * sn;
+  check('rolling sphere down a 10 deg slope: a / (5/7 g sin theta)', acc / aRef, 1 - 1e-3, 1 + 1e-3);
+  // a capsule pivoting across a static box edge: a cylinder contact keeps its axial coordinate through the step's
+  // re-seats (re-seating along the full normal marched it toward a cap: 1.9 cm per step here)
+  const wc = new DynamicsWorld({ sleep: false });
+  const cap = wc.addBody({ shape: capsule(0.05, 0.3), position: [0.6, 1.05, 0], quaternion: [0, 0, -Math.SQRT1_2, Math.SQRT1_2] });
+  wc.addBody({ type: 'static', shape: box(0.5, 0.5, 0.5), position: [0, 0.5, 0] });
+  const y0 = new Float64Array(64);
+  let drift = 0, nI = 0, seen = 0;
+  const axialOf = (world, i) => (world.contacts.a[i] === cap ? world._la[i * 3 + 1] : world.contacts.b[i] === cap ? world._lb[i * 3 + 1] : NaN);
+  wc.addParticleSolver({
+    name: 'axial-probe',
+    beginStep(world) { nI = Math.min(64, world.contacts.count); for (let i = 0; i < nI; i++) y0[i] = axialOf(world, i); },
+    endStep(world) {
+      for (let i = 0; i < nI; i++) if (Number.isFinite(y0[i]) && Math.abs(y0[i]) < 0.3 - 1e-9) { seen++; drift = Math.max(drift, Math.abs(axialOf(world, i) - y0[i])); }
+    },
+  });
+  run(wc, 0.5);
+  check('capsule pivoting on a box edge: cylinder contacts seen', seen, 1, Infinity);
+  check('capsule pivoting on a box edge: axial drift of a contact anchor over a step', drift, 0, 1e-6, 'm');
+  note(`capsule pivoting on a box edge: wz after 0.5 s ${wc.bodies.angVel[cap * 3 + 2].toFixed(3)} rad/s (previous re-seat: -4.9)`);
+}
+
 console.log(results.join('\n'));
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll dyn-world checks passed.');
 process.exit(failures ? 1 : 0);

@@ -1,5 +1,5 @@
 // Physics sandbox — the XPBD dynamics world (src/physics/dynamics) on the engine (src/**) and three.js.
-// Wiring: Engine (fixed step at the scene's rate: 60 Hz, the car 120 Hz; render interpolation, adaptive resolution,
+// Wiring: Engine (fixed step at the scene's rate: 60 Hz, the car and destructible 120 Hz; render interpolation, adaptive resolution,
 // F3 profiler) + PhysicsWorld (flat ground at y = 0, static boxes) + DynamicsClient (in-thread; ?worker=1) attached
 // to the PhysicsWorld (rigid bodies become 'rigid' colliders for controllers and rigs) + BodyPools (one InstancedPool
 // per shape type, sleeping bodies dimmed) + PhysicsDebug (?debug=1, F4) + OrbitRig / FreeFlyRig (V) + InputMap +
@@ -13,8 +13,10 @@
 // interpolates exact poses and the HUD's step ms is the cost being measured. ?worker=1 shows the off-thread mode (one or
 // two steps of latency, poses extrapolated from the latest snapshot); the client falls back in-thread when the worker
 // cannot start, and dyn.mode (not the URL) decides the interpolation, the HUD and the bench behaviour.
-// Query: ?scene=stack|joints|chain|ragdoll|car|bench1000 (default stack), ?bodies=N (bench1000), ?solid=0 (car: the
-// crates are not colliders for the vehicle controller, only the kinematic box pushes them), ?worker=1,
+// Query: ?scene=stack|joints|chain|ragdoll|car|bench1000|cloth|rope|soft|buoyancy|destructible (default stack),
+// ?bodies=N (bench1000), ?solid=0 (car: the crates are not colliders for the vehicle controller, only the kinematic box
+// pushes them), ?fseed=N (destructible: the wall's fracture seed, default 35), ?worker=1 (not for the 0.9.0 scenes listed in SCENE_PARTICLES: particles, soft bodies, buoyancy and
+// fracture live on the in-thread world, so they run in-thread and say so in the console),
 // ?debug=1, ?substeps=N (4), ?hz=N, ?seed=N, ?t=<preset|hours>, ?nofx=1, ?fps=60, ?profile=N, ?gbuffer=1 (MRT scene
 // pass + per-instance velocity for the body pools), ?aa=auto|msaa|fxaa|taa, ?cascades=2|3|4, ?shadows=fast|pcf|pcss,
 // 0.8.0: ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1[&focus=&fstop=], ?lut=warm|bleach, ?aonormals=gbuffer (samples/shared/fx-flags.js),
@@ -36,7 +38,7 @@ import { Atmosphere, PostFX, PhysicsDebug, TIME_PRESETS, makeCanvas, finishTextu
 import { InputMap } from '@vibe/engine/input';
 import { OrbitRig, FreeFlyRig } from '@vibe/engine/camera';
 import { LoadingScreen } from '@vibe/engine/ui';
-import { SCENES, SCENE_HZ, BodyPools, buildStatics } from './scenes.js';
+import { SCENES, SCENE_HZ, SCENE_PARTICLES, BodyPools, buildStatics } from './scenes.js';
 import { PROXY_LAYER } from './car.js';
 import { HUD, ACCENT, applyTheme } from './hud.js';
 import { readFxFlags, aoFlags, loadLut, fxSettings } from '../shared/fx-flags.js';
@@ -52,6 +54,9 @@ const SCENE_IDS = Object.keys(SCENES);
 const SCENE = SCENE_IDS.includes(params.get('scene')) ? params.get('scene') : 'stack';
 if (params.has('scene') && params.get('scene') !== SCENE) console.warn(`[sandbox] unknown scene '${params.get('scene')}' (${SCENE_IDS.join(', ')}): stack`);
 const WORKER = flag('worker');
+// 0.9.0 scenes: the world's particle capacity (0: none); any listed scene needs the in-thread world (dyn.world)
+const PARTICLES = SCENE_PARTICLES[SCENE] ?? -1;
+const IN_THREAD = PARTICLES >= 0;
 const DEBUG = flag('debug');
 const SEED = (+params.get('seed') || 1) >>> 0;
 const HZ = +params.get('hz') || SCENE_HZ[SCENE] || 60;
@@ -141,22 +146,24 @@ async function boot() {
       progress(0.3, 'Pouring the ground…');
       await nextFrame();
       W.ground = buildGround(scene, renderer);
-      W.statics = buildStatics(SCENE, { physics, scene });
+      W.statics = buildStatics(SCENE, { physics, scene, renderer });
       progress(1, 'Ready');
     },
   }, 'world-load');
   await engine.load((p, label) => loading.setProgress(p * 0.5, label));
 
   // ---------------------------------------------------------------- dynamics
-  loading.setProgress(0.6, WORKER ? 'Starting the physics worker…' : 'Starting the physics…');
+  if (WORKER && IN_THREAD) console.info(`[sandbox] ?worker=1 ignored: the ${SCENE} scene needs the in-thread world (particles, buoyancy, fracture)`);
+  loading.setProgress(0.6, WORKER && !IN_THREAD ? 'Starting the physics worker…' : 'Starting the physics…');
   const dyn = new DynamicsClient({
     timing: true, // the HUD shows the step time (the world's default is off: timers box doubles)
-    worker: WORKER, physics, gravity: [0, -9.81, 0], substeps: SUBSTEPS, maxBodies: Math.min(65536, Math.max(4096, BODIES + 512)),
+    worker: WORKER && !IN_THREAD, physics, gravity: [0, -9.81, 0], substeps: SUBSTEPS, maxBodies: Math.min(65536, Math.max(4096, BODIES + 512)),
     maxContacts: Math.max(16384, 12 * BODIES), sleep: { linear: 0.05, angular: 0.05, time: 0.5 }, seed: SEED,
+    ...(PARTICLES > 0 ? { maxParticles: PARTICLES } : {}), // only the particle scenes: every other world is created as before
   });
   await dyn.ready;
   const WORKER_ON = dyn.mode === 'worker'; // the client falls back in-thread when the worker fails to start
-  if (WORKER && !WORKER_ON) console.warn('[sandbox] ?worker=1 but the dynamics worker did not start: running in-thread');
+  if (WORKER && !IN_THREAD && !WORKER_ON) console.warn('[sandbox] ?worker=1 but the dynamics worker did not start: running in-thread');
   // the car / rigs / controllers see the bodies as 'rigid' boxes, except the car's own kinematic proxy
   attachToPhysicsWorld(dyn, physics, { mask: ~PROXY_LAYER });
   const pools = new BodyPools(scene, dyn, { interpolate: !WORKER_ON, fixedDt: engine.fixedDt, velocity: GBUFFER, textures: { box: boxTexture(renderer), round: roundTexture(renderer) } });
@@ -167,7 +174,7 @@ async function boot() {
   // ---------------------------------------------------------------- HUD, input, camera rigs
   const href = (id) => { const p = new URLSearchParams(location.search); p.set('scene', id); return `${location.pathname}?${p}`; };
   const hud = new HUD({ scenes: SCENE_IDS, current: SCENE, href, worker: WORKER_ON });
-  if (WORKER && !WORKER_ON) hud.flash.show('NO WORKER · IN-THREAD');
+  if (WORKER && !WORKER_ON) hud.flash.show(IN_THREAD ? 'IN-THREAD SCENE' : 'NO WORKER · IN-THREAD');
   const canvas = renderer.domElement;
   const map = new InputMap({ actions: ACTIONS });
   const focus = new THREE.Vector3();
@@ -189,7 +196,7 @@ async function boot() {
   };
 
   // ---------------------------------------------------------------- scene lifecycle
-  const ctx = { dyn, physics, scene, pools, params, THREE, rand: null };
+  const ctx = { dyn, physics, scene, pools, params, THREE, rand: null, statics: W.statics, renderer }; // statics: buildStatics' result (the pool)
   const getSubsteps = () => (dyn.world ? dyn.world.substeps : SUBSTEPS); // worker mode: fixed at construction
   const hs = { // HUD state (reused)
     stats: null, fps: 0, latency: NaN, substeps: SUBSTEPS, hz: HZ, extra: null,
@@ -201,11 +208,13 @@ async function boot() {
     return hs;
   };
   /** One fixed step, the same for the live loop and the bench settle: the scene's drivers (kinematic targets, forces,
-   *  spawns, teleports) first so they apply in this step, then the solve, then the pose capture for interpolation. */
+   *  spawns, teleports) first so they apply in this step, then the solve, then the pose capture for interpolation
+   *  (the scene's own meshes: afterStep, e.g. particle / fracture meshes). */
   const fixedStep = (dt) => {
     if (current.fixedUpdate) current.fixedUpdate(dt);
     dyn.step(dt);
     pools.capture();
+    if (current.afterStep) current.afterStep(dt);
   };
   /** Fill everything drawn from the physics state now (see the header invariant). */
   const present = () => {
@@ -354,9 +363,10 @@ async function boot() {
   const loadMs = Math.round(performance.now() - t0);
   window.__sandbox = {
     THREE, engine, dyn, physics, get scene() { return current; }, pools, dbg, spawn, reset, setDebug, fixedStep, present,
+    get particles() { return dyn.world ? dyn.world.particles || null : null; }, statics: W.statics, // 0.9.0 scenes: the ParticleStore, the pool
     get rig() { return rig; }, rigs, setRig, map, hud, atmo, postfx, harness, params, loadMs,
   };
-  console.info(`[sandbox] ready in ${loadMs} ms · ${SCENE} · ${pools.count} drawn bodies · ${WORKER_ON ? 'worker' : 'in-thread'} · ${HZ} Hz x ${getSubsteps()} substeps`);
+  console.info(`[sandbox] ready in ${loadMs} ms · ${SCENE} · ${pools.count} drawn bodies${PARTICLES > 0 ? ` · ${PARTICLES} particle slots` : ''} · ${WORKER_ON ? 'worker' : 'in-thread'} · ${HZ} Hz x ${getSubsteps()} substeps`);
   engine.start();
   loading.hide(400);
   harness.setReady();

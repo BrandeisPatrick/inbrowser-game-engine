@@ -313,6 +313,79 @@ What is not there yet: continuous collision detection (fast thin bodies can tunn
 rotate about the shape origin, the car treats bridged bodies as immovable walls (two-way vehicle coupling is
 Phase 5, as are cloth, ropes, soft bodies, buoyancy and fracture).
 
+### Unified XPBD (0.9.0): particles, cloth, ropes, soft bodies, coupling, buoyancy, fracture, ragdolls
+The rigid solver gains a particle store and a solver-plugin seam, and everything deformable is built on it; the rigid
+path without `maxParticles` steps bit-identically to 0.8.0 (pinned), `npm test` grows by six suites.
+- **Particles** (`dynamics/particles.js`): `new DynamicsWorld({ maxParticles, particleDamping })` owns
+  `world.particles` (SoA `ParticleStore`: pos / prevPos / vel / invMass / radius / mass / flags / group, free-list
+  ids with free hooks) and `world.constraints` (`ParticleConstraints`: distance, quick bending, attachment to a body
+  point, one-sided tethers, body tethers; XPBD compliance, one Gauss-Seidel sweep per position iteration).
+  `world.addParticleSolver(solver)` registers `{ name, beginStep, solvePositions(world, h, it),
+  solveVelocities(world, h, it), endStep, serialize, restore }` plugins that run inside every substep after the
+  built-in constraints (also on worlds without particles); `world.isActive(id)`, `world.particleAabb(group, out)`,
+  `world.recollidePairs(ids, n)` for pairs a plugin unglued in its beginStep. Builders `Cloth.grid` (structural /
+  shear / bend constraints, tethers to the pins when stretch is 0, pins by name / index / body) and `Rope.chain`.
+  Serialize / from carry the store, the constraints and the plugins by name; the worker client falls back to
+  in-thread with particles (no snapshot protocol for them yet). Sleeping: a body held by a loaded attachment stays
+  awake only while its particle moves or the load changes.
+- **Soft bodies** (`dynamics/softbody.js`): `SoftBody.lattice` (box / voxel sphere, 6 tets per cell, edge distance
+  constraints + XPBD tet-volume constraints, optional global `pressure` constraint that holds the total volume to
+  0.02 %), `tetrahedralize`, `SoftBody.skin` (any mesh bound by barycentric coordinates, nearest-tet rule outside),
+  `VolumeConstraints` as a plugin.
+- **Coupling and buoyancy** (`dynamics/coupling.js`): `ParticleCollider` (particles vs rigid bodies, static boxes,
+  the heightfield and trimeshes: contacts found once per step from each group's AABB, solved every substep as
+  unilateral XPBD constraints with the body's generalized inverse mass, Coulomb + static friction, two-way; a body
+  carried by particles stays awake), `Buoyancy` (sample-point submerged volume per shape, buoyant force + linear /
+  angular drag as per-step forces; particles by submerged fraction; `fluid.heightAt(x, z, t)` so the world's Gerstner
+  `waveHeight` plugs in), `closestPointOnShape`.
+- **Fracture** (`dynamics/fracture.js`, `render/Fracture.js`): `fracturePieces` (seeded plane cuts of a hull,
+  adjacency tracked as contact polygons, minimum fragment fraction), `FracturedBody` (pieces as bodies glued by FIXED
+  joints anchored at the shared faces, `breakForce` 15 kN + `breakStress` per area, `compliance` 5e-7 m/N so a hit
+  stays local; `update()` reports and removes broken joints, `breakNear`, `impactBreak(contacts, { impulse, radius })`
+  for deterministic game-side shattering), `FractureMesh` (one mesh per piece, interior material). The joint solver
+  now bounds a breaking joint's rows at `breakForce` per substep, so the struck piece keeps the impulse instead of
+  the whole assembly.
+- **Character dynamics** (`CharacterController.attachDynamics(dyn, { pushMass, pushForce, ride })`): light
+  dynamic bodies are pushed with bounded impulses (and a body that cannot yield becomes a moving wall), moving
+  platforms carry the character (velocity frame switches on landing / leaving); `platformVelocity`, `pushedBody`,
+  `rideBody`. Without it the controller is bit-identical.
+- **Ragdoll** (`anim/Ragdoll.js`): `Ragdoll.fromSkeleton` maps a skeleton (auto by name: the procedural rig,
+  mixamo / RobotExpressive) to capsules + ball / hinge joints with limits measured from the rest pose,
+  `activate` from the current bone transforms, `update` drives the bones from the bodies, `deactivate` hands them
+  back; `AnimationController.resync()` after writing bones by hand.
+- **Samples**: sandbox scenes `cloth`, `rope`, `soft`, `buoyancy` (a pool with the world's Gerstner surface),
+  `destructible` (`render/SoftMeshes.js`: `ClothMesh`, `RopeMesh`, `SoftBodyMesh`, `ParticleMesh`); the character
+  pushes crates, rides an elevator, ragdolls on a hard fall (or K) and mantles ledges with planted hands (poses
+  `push`, `ragdoll`); `npm run smoke` adds the five sandbox pages.
+Known / deferred: no particle-particle contacts or self-collision, no CCD (fast thin bodies tunnel; a ragdoll
+dropped from 3 m first contacts 5 cm deep), particles in-thread only, one Gauss-Seidel pass (stiff edges fight
+rigid tets: use `pressure`; cloth corners pinched by static friction at 4 substeps), rolling spheres / capsules
+gain spin on the ground (under investigation), the buoyancy scene's wave height uses Math.sin so it is bit-equal
+within one JS engine only.
+
+#### Measured (0.9.0, Node 26 on the Apple M4, the same V8 as the app's Chromium; `bench/results/2026-10-29-1734-node-p5-dynamics.json`)
+ms per 1/120 s step at 4 substeps and 1 position iteration (240 timed steps after 60 warm-up steps):
+
+| scene | ms / step | what |
+|---|---|---|
+| cloth 32x32 + collider | 0.40 | 1024 particles, 8 648 constraints, falling onto the ground |
+| cloth 64x64 + collider | 1.63 | 4096 particles, 35 720 constraints |
+| 1000 bodies pit + 200 rope particles | 3.23 | the 0.6.0 pit (box / sphere / capsule) with ten 20-segment ropes over it, ~2 400 contacts |
+| soft cubes 6^3 x 2 + 8^3 + collider | 0.89 | 1 415 particles, 7 892 constraints (edges + tets) |
+| buoyancy, 200 boxes on a wave | 1.93 | 8^3 sample points per shape, a sine `heightAt` (80 k calls / step dominate) |
+| fractured wall, 40 pieces glued at rest | 3.29 | 141 FIXED glue joints solved as one joint tree (LDL^T) |
+| the same wall after the hit | 3.09 | pieces freed, joints removed as they break |
+
+The sandbox scenes in the app (1280x720): cloth 0.70 ms / step, soft 0.68, rope 0.05, buoyancy 0.03, destructible 3.9
+at 120 Hz (two steps per frame). The glue tree is the expensive part of fracture: a glued wall costs as much as
+1000 loose bodies; broken joints are removed so the cost falls as it shatters.
+What the destructible scene shows is honest about the solver: the hit opens a hole and throws a few pieces (3 on
+the scene's hand-picked cut pattern, 0-2 on most seeds), while 90-98 % of the wall stays glued; a full collapse
+needs continuous collision (a 20 m/s ball first contacts 12 cm deep at 1/120 s) and a softer contact model, both
+1.0+ items. The rolling-contact fix (anchors of a body whose top-level shape is a sphere or a capsule are re-seated
+on the surface every substep; compounds keep material anchors) changes every scene with rolling spheres / capsules
+(the sandbox stack ball's captures moved at 1280x720), car-sim and world-build pins are untouched.
+
 ## World layer (`engine/src/world`, extracted)
 `MapWorld` composes a whole city from map data + options + plugins; every system is also usable on its own.
 

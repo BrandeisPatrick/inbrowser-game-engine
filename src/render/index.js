@@ -35,6 +35,9 @@ export { buildMipChain, dataTextureFromMips, fillTransparent, dilateRGB } from '
 export { registerRenderLoaders, parseCubeLUT, disposeInstance } from './loaders.js';
 // debug lines for a DynamicsWorld / DynamicsClient (shapes, contacts, joints)
 export { PhysicsDebug } from './PhysicsDebug.js';
+// 0.9.0: meshes over the dynamics world's particles (cloth, rope, soft bodies) and fractured bodies' pieces
+export { ClothMesh, SoftBodyMesh, RopeMesh, ParticleMesh } from './SoftMeshes.js';
+export { FractureMesh, pieceGeometry } from './Fracture.js';
 // clustered forward lights (0.7.0): hundreds of small point / spot lights through a per-material define
 export {
   ClusteredLights, installClusteredChunks, applyClustered, syncClustered, setMaterialClustered, clusteredUniforms,
