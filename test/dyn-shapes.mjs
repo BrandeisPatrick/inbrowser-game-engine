@@ -2,8 +2,7 @@
 // properties, hull topology, support / aabb / project against brute force, the trimesh BVH against a linear scan, and
 // that the per-step queries do not allocate. No browser, no WebGL.
 // Run: node test/dyn-shapes.mjs  (imports the modules by path until the physics index exports them)
-import v8 from 'node:v8';
-import vm from 'node:vm';
+import { bytesPerCall, gate } from './helpers/alloc.mjs';
 import { Vector3, Quaternion } from 'three';
 import { mulberry32 } from '../src/core/mathDet.js';
 import { SHAPE } from '../src/physics/dynamics/state.js';
@@ -23,19 +22,7 @@ function check(name, value, lo = 1, hi = lo, unit = '') {
 }
 const fmt = (x) => (!Number.isFinite(x) ? String(x) : Number.isInteger(x) ? String(x) : Math.abs(x) < 1e-3 ? x.toExponential(2) : x.toFixed(3)).padStart(10);
 
-// Bytes allocated and GCs run while fn() executes (same helper as test/core.mjs).
-performance.now(); process.memoryUsage();
-function measureAlloc(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  const t0 = performance.now();
-  fn();
-  const ms = performance.now() - t0;
-  const h1 = process.memoryUsage().heapUsed;
-  const gcs = prof.stop().statistics.length;
-  return { bytes: h1 - h0, gcs, ms };
-}
+const note = (s) => results.push(`NOTE  ${s}`);
 
 // ---- helpers --------------------------------------------------------------------------------------------------------
 const rnd = mulberry32(0x5eed5);
@@ -524,13 +511,9 @@ const SHAPES = {
 // V8 boxes double arguments into heap numbers at call sites it does not inline; shapes.js therefore gives every shape
 // the same small public methods (scalars -> module scratch -> per-type core taking no doubles). Each shape is measured
 // with its own runner (new Function: its own feedback), then all six shapes go through ONE shared call site, which
-// must not allocate either. Runners are warmed up with many short calls so the measured call enters optimized code (an
-// interpreted loop boxes every double until on-stack replacement kicks in), a full GC runs before each measurement so
-// leftover garbage cannot trigger a scavenge inside it, and the best of up to 3 repetitions counts (a concurrent JIT
-// job finishing late can leave one repetition partly interpreted; per-call allocation would show in all of them).
+// must not allocate either: exact bytes per call of the runner forced into TurboFan, over a GC-free window, with a
+// control (test/helpers/alloc.mjs). The runner reads the doubles it passes from Float64Arrays, as a solver does.
 {
-  v8.setFlagsFromString('--expose-gc');
-  const gc = vm.runInNewContext('gc');
   const N = 1e5, dirs = new Float64Array(N * 3), poses = new Float64Array(N * 7), u = new Float64Array(3);
   for (let i = 0; i < N; i++) {
     randUnit(u); dirs.set(u, i * 3);
@@ -543,30 +526,21 @@ const SHAPES = {
     aabb: 's.aabb(poses[p], poses[p + 1], poses[p + 2], poses[p + 3], poses[p + 4], poses[p + 5], poses[p + 6], out6, 0.01); acc += out6[0];',
     project: 's.project(dirs[d], dirs[d + 1], dirs[d + 2], poses[p], poses[p + 1], poses[p + 2], poses[p + 3], poses[p + 4], poses[p + 5], poses[p + 6], out2); acc += out2[0];',
   };
-  const makeRunner = (...calls) => new Function('list', 'n', 'dirs', 'poses', 'out3', 'out6', 'out2',
-    `let acc = 0; for (let j = 0; j < list.length; j++) { const s = list[j]; for (let i = 0; i < n; i++) { const d = i * 3, p = i * 7; ${calls.map((c) => CALL[c]).join(' ')} } } return acc;`);
-  const measure = (run, list) => {
-    for (let k = 0; k < 400; k++) run(list, 200, dirs, poses, out3, out6, out2); // many short calls: the function entry gets optimized
-    let best = null;
-    for (let rep = 0; rep < 3 && !(best && best.gcs === 0); rep++) {
-      gc();
-      const m = measureAlloc(() => run(list, N, dirs, poses, out3, out6, out2));
-      if (!best || m.gcs < best.gcs) best = m;
-    }
-    return best;
-  };
+  // run(n): n poses x every shape of the list
+  const makeRunner = (list, ...calls) => new Function('list', 'dirs', 'poses', 'out3', 'out6', 'out2',
+    `return (n) => { let acc = 0; for (let j = 0; j < list.length; j++) { const s = list[j]; for (let i = 0; i < n; i++) { const d = i * 3, p = i * 7; ${calls.map((c) => CALL[c]).join(' ')} } } return acc; };`)(list, dirs, poses, out3, out6, out2);
+  const timed = (run) => { const t0 = performance.now(); run(N); return performance.now() - t0; };
   const timing = [];
   for (const [name, s] of Object.entries(SHAPES)) {
-    const m = measure(makeRunner('support', 'aabb'), [s]), mp = measure(makeRunner('project'), [s]);
-    timing.push(`${name} ${(m.ms * 1e6 / N).toFixed(0)} + ${(mp.ms * 1e6 / N).toFixed(0)} ns`);
-    check(`${name}: 1e5 x (support + aabb): heap growth`, m.bytes / 1024, -Infinity, 1024, 'KB');
-    check(`${name}: 1e5 x (support + aabb), 1e5 x project: GCs`, m.gcs + mp.gcs, 0);
+    const sa = makeRunner([s], 'support', 'aabb'), pr = makeRunner([s], 'project');
+    gate(check, note, `${name}: support + aabb`, bytesPerCall(sa, N));
+    gate(check, note, `${name}: project`, bytesPerCall(pr, N));
+    timing.push(`${name} ${(timed(sa) * 1e6 / N).toFixed(0)} + ${(timed(pr) * 1e6 / N).toFixed(0)} ns`);
   }
-  const mm = measure(makeRunner('support', 'aabb', 'project'), Object.values(SHAPES));
-  check('one call site, 6 shapes x 1e5 x 3 queries: heap growth', mm.bytes / 1024, -Infinity, 1024, 'KB');
-  check('one call site, 6 shapes x 1e5 x 3 queries: GCs', mm.gcs, 0);
+  const all = makeRunner(Object.values(SHAPES), 'support', 'aabb', 'project');
+  gate(check, note, 'one call site, 6 shapes x 3 queries', bytesPerCall(all, N / 2), { unit: 'pose' });
   results.push(`info  ns per call, support + aabb | project (one shape per call site): ${timing.join(', ')}`);
-  results.push(`info  (convex: ${SHAPES.convex.vertexCount} verts, trimesh: ${SHAPES.trimesh.vertexCount} verts, compound: 4 children); shared call site: ${(mm.ms * 1e6 / (6 * N)).toFixed(0)} ns per support + aabb + project`);
+  results.push(`info  (convex: ${SHAPES.convex.vertexCount} verts, trimesh: ${SHAPES.trimesh.vertexCount} verts, compound: 4 children); shared call site: ${(timed(all) * 1e6 / (6 * N)).toFixed(0)} ns per support + aabb + project`);
 }
 
 console.log(results.join('\n'));

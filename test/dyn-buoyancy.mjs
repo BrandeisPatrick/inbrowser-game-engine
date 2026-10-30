@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 import vm from 'node:vm';
+import { bytesPerCall, describe, functionsOfDir, gate } from './helpers/alloc.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const NEED = ['state.js', 'shapes.js', 'xpbd.js', 'DynamicsWorld.js', 'particles.js', 'coupling.js'];
@@ -616,8 +617,8 @@ function buildMixed() {
 
 // ================================================================================ 9. allocation + timing
 // 1024 cloth particles + 50 bodies in a flat fluid (both solvers), after a warm-up; the hooks alone on the live state,
-// then the whole world.step. Per step the hooks box the six bounds handed to broadphase.query per particle group
-// (~100 B, short-lived); nothing is retained and no GC runs.
+// then the whole world.step: exact bytes per step of TurboFan code (test/helpers/alloc.mjs: the loop and every dynamics
+// function it enters forced into TurboFan, one GC-free window, a control) and the retained heap.
 function allocScene(fluid) {
   const physics = new PhysicsWorld({ groundLevel: 0 });
   physics.addStaticBox(-6, 0, -5, 1, -6, 6); physics.addStaticBox(5, 0, 6, 1, -6, 6);
@@ -639,39 +640,26 @@ function allocScene(fluid) {
   const { w, pc, buoy, cloth } = allocScene(true);
   check('alloc: scene has 1024 particles and 50 bodies', cloth.count + w.bodies.size * 1000, 51024, 51024);
   for (let k = 0; k < 300; k++) w.step(DT); // warm-up: the cloth lands on the bodies and the water
-  const grow = (fn) => {
-    if (gc) gc();
-    const prof = new v8.GCProfiler();
-    prof.start();
-    const h0 = process.memoryUsage().heapUsed;
-    fn();
-    const h1 = process.memoryUsage().heapUsed;
-    const gcs = prof.stop().statistics.length;
-    if (gc) gc();
-    return { bytes: h1 - h0, gcs, retained: process.memoryUsage().heapUsed - h0 };
-  };
+  const retained = (fn) => { if (gc) gc(); const h0 = process.memoryUsage().heapUsed; fn(); if (gc) gc(); return process.memoryUsage().heapUsed - h0; };
+  const force = await functionsOfDir(new URL('../src/physics/dynamics/', import.meta.url));
   const H = DT / 4;
-  const hooks = () => {
-    for (let k = 0; k < 300; k++) {
+  const hooks = (n) => {
+    for (let k = 0; k < n; k++) {
       buoy.beginStep(w, DT); pc.beginStep(w, DT);
       for (let s = 0; s < 4; s++) { pc.solvePositions(w, H, 0); buoy.solvePositions(w, H, 0); buoy.solveVelocities(w, H, 0); pc.solveVelocities(w, H, 0); }
       pc.endStep(w, DT); buoy.endStep(w, DT);
     }
   };
-  hooks(); hooks();
-  let best = null;
-  for (let r = 0; r < 3; r++) { const g = grow(hooks); if (best === null || g.gcs < best.gcs || (g.gcs === best.gcs && g.bytes < best.bytes)) best = g; }
-  check('alloc: coupling hooks, 300 steps x 1024 particles: GCs (best of 3)', best.gcs, 0, 0);
-  check('alloc: coupling hooks, 300 steps: retained heap (gc before / after)', best.retained, -Infinity, 4096, 'B');
-  check('alloc: coupling hooks, 300 steps: bytes allocated per step (short-lived)', best.bytes / 300, -Infinity, 256, 'B');
-  note(`alloc: hooks ran with ${pc.stats.contacts} contacts (${pc.stats.bodies} body, ${pc.stats.statics} static, ${pc.stats.ground} ground), ${buoy.stats.bodies} floating bodies, ${buoy.stats.particles} floating particles; ${(best.bytes / 300).toFixed(0)} B/step allocated (broadphase.query bounds)`);
-  // the whole step: retained heap only; what it allocates per step comes from the rigid solver's V8 boxing once the
-  // cloth pushes bodies around (narrowphase gjk / support / sphereBox, DynamicsWorld._blockPosition: 0 B in coupling.js)
-  const steps = () => { for (let k = 0; k < 300; k++) w.step(DT); };
-  const first = grow(steps), whole = grow(steps); // the first window still re-optimises code (heapUsed counts code space)
-  note(`alloc: world.step x 300, first window after the hooks loop: retained ${(first.retained / 1024).toFixed(1)} KB`);
-  check('alloc: world.step x 300 with both solvers: retained heap (gc before / after)', whole.retained / 1024, -Infinity, 64, 'KB');
-  note(`alloc: world.step x 300: ${whole.gcs} GC(s), ${(whole.bytes / 300).toFixed(0)} B/step allocated in total (rigid solver boxing, see dyn-world)`);
+  hooks(600);
+  gate(check, note, 'coupling hooks (1024 particles)', bytesPerCall(hooks, 300, { warm: 300, budget: 256, force }), { budget: 256, unit: 'step' });
+  check('alloc: coupling hooks, 300 steps: retained heap (gc before / after)', retained(() => hooks(300)), -Infinity, 4096, 'B');
+  note(`alloc: hooks ran with ${pc.stats.contacts} contacts (${pc.stats.bodies} body, ${pc.stats.statics} static, ${pc.stats.ground} ground), ${buoy.stats.bodies} floating bodies, ${buoy.stats.particles} floating particles`);
+  // the whole step: the retained heap, and its bytes per step (reported: the rigid solver's, see dyn-world)
+  const steps = (n) => { for (let k = 0; k < n; k++) w.step(DT); };
+  steps(300); // the first 300 steps after the hooks loop still compile code (heapUsed counts code space)
+  const whole = bytesPerCall(steps, 100, { warm: 100, budget: Infinity, force });
+  check('alloc: world.step x 300 with both solvers: retained heap (gc before / after)', retained(() => steps(300)) / 1024, -Infinity, 64, 'KB');
+  note(`alloc: world.step with both solvers (not gated): ${describe(whole, 'step')}`);
   check('alloc: no NaN after 1800 steps', particlesFinite(w), 1, 1);
 }
 {

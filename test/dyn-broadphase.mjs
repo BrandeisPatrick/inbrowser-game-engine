@@ -3,6 +3,7 @@
 // against brute force, remove, invalid boxes, the radix sort, allocation after warm-up, and update timing.
 // Run: node test/dyn-broadphase.mjs   (no browser, no WebGL)
 import v8 from 'node:v8';
+import { atLeast, bytesPerCall, gate } from './helpers/alloc.mjs';
 import vm from 'node:vm';
 import * as MathDet from '../src/core/mathDet.js';
 import { BodyStore, BODY, FLAG, pairKey, pairA, pairB } from '../src/physics/dynamics/state.js';
@@ -291,10 +292,10 @@ for (const [label, sc] of [['2000 boxes / 100 m cube', sparse], ['2000 boxes / 2
 }
 
 // ================================================================================================= allocation after warm-up
-// heapUsed growth across GC-free runs of warm updates. V8 adds a few KB of its own (code / feedback housekeeping)
-// whatever the run length, so the check is on the slope: growth over 2500 updates minus growth over 500, per update
-// (one 16-byte HeapNumber per update would read 16 B). The sampling heap profiler is no help here: starting it
-// deoptimizes the running code, and unoptimized code boxes doubles.
+// Exact bytes per update of a loop forced into TurboFan, over a GC-free window (test/helpers/alloc.mjs; one 16-byte
+// HeapNumber per update would read 16 B), with its control (an array per update) and a second one: { timing: true }
+// (performance.now() boxes its result). The sampling heap profiler is no help here: starting it deoptimizes the
+// running code, and unoptimized code boxes doubles.
 {
   let gc = globalThis.gc;
   if (!gc) { try { v8.setFlagsFromString('--expose-gc'); gc = vm.runInNewContext('gc'); } catch { gc = null; } }
@@ -304,7 +305,7 @@ for (const [label, sc] of [['2000 boxes / 100 m cube', sparse], ['2000 boxes / 2
   const U = 4000, K = 20, ids = new Int32Array(U * K), dv = new Float64Array(U * K * 3);
   for (let i = 0; i < U * K; i++) { ids[i] = (rng() * 2000) | 0; for (let k = 0; k < 3; k++) dv[i * 3 + k] = (rng() * 2 - 1) * 0.5; }
   let next = 0;
-  const run = (count, target = bp) => {
+  const runOn = (target) => (count) => {
     for (let c = 0; c < count; c++, next = (next + 1) % U) {
       const ab = bodies.aabb;
       for (let j = next * K, e = j + K; j < e; j++) {
@@ -314,26 +315,11 @@ for (const [label, sc] of [['2000 boxes / 100 m cube', sparse], ['2000 boxes / 2
       target.update(bodies);
     }
   };
-  for (let w = 0; w < 100; w++) run(10);   // warm-up: JIT tier-up, buffer growth
-  const grow = (fn) => {
-    if (gc) gc();
-    const prof = new v8.GCProfiler();
-    prof.start();
-    const h0 = process.memoryUsage().heapUsed;
-    fn();
-    const h1 = process.memoryUsage().heapUsed;
-    return prof.stop().statistics.length ? Infinity : h1 - h0;   // a GC inside invalidates the round
-  };
-  const best = (n, target) => { let b = Infinity; for (let r = 0; r < 3; r++) { const g = grow(() => run(n, target)); if (g < b) b = g; } return b; };
-  const g500 = best(500), g2500 = best(2500);
-  check('alloc: heap growth per warm update (slope 500 -> 2500 updates)', (g2500 - g500) / 2000, -Infinity, 1, 'B');
-  check('alloc: heap growth over 2500 warm updates (GC-free, best of 3)', g2500, -Infinity, 8192, 'B');
-  // controls: the same slope sees { timing: true } (performance.now() boxes its result) and one small array per call
-  const timed = new Broadphase(4096, { timing: true });
-  for (let w = 0; w < 100; w++) run(10, timed);
-  check('alloc: control: { timing: true } slope is detected', (grow(() => run(2500, timed)) - grow(() => run(500, timed))) / 2000, 16, Infinity, 'B');
-  let keep = null;
-  check('alloc: control: one small array per call is detected', grow(() => { for (let i = 0; i < 2000; i++) keep = [i, keep]; }) / 2000, 16, Infinity, 'B');
+  const run = runOn(bp);
+  for (let w = 0; w < 100; w++) run(10);   // warm-up: buffer growth
+  gate(check, note, 'update() of 2000 bodies (1 % moved)', bytesPerCall(run, 2500, { warm: 1000 }), { unit: 'update' });
+  const timed = runOn(new Broadphase(4096, { timing: true }));
+  atLeast(check, note, 'control: { timing: true } is detected (B / update)', bytesPerCall(timed, 2500, { warm: 1000 }), 16);
   if (gc) gc();
   const h0 = process.memoryUsage().heapUsed;
   run(200);

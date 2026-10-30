@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import v8 from 'node:v8';
 import vm from 'node:vm';
+import { ALLOC, bytesPerCall, describe, functionsOf } from './helpers/alloc.mjs';
 import { AnimationController, TwoBoneIK, CCDIK, makeIKChain } from '../src/anim/index.js';
 
 const DT = 1 / 60;
@@ -351,8 +352,6 @@ const wpos = (o) => o.getWorldPosition(new THREE.Vector3());
 {
   let gc = globalThis.gc;
   if (!gc) { try { v8.setFlagsFromString('--expose-gc'); gc = vm.runInNewContext('gc'); } catch { gc = null; } }
-  const exact = v8.getHeapStatistics().total_allocated_bytes !== undefined;   // Node >= 26
-  const allocated = exact ? () => v8.getHeapStatistics().total_allocated_bytes : () => process.memoryUsage().heapUsed;
   const clips = () => [...locoClips(), mover('Move', 1, 2), sway('Jump', 0.5, 0.6)];
   const make = () => {
     const ctl = new AnimationController(makeRig().root, clips(), {
@@ -389,28 +388,35 @@ const wpos = (o) => o.getWorldPosition(new THREE.Vector3());
     }
     mixer.update(DT);
   };
-  for (let i = 0; i < 2000; i++) frame(i);   // warm-up (JIT, bindings, event records)
+  for (let i = 0; i < 2000; i++) frame(i);   // warm-up (bindings, event records)
   for (let j = 0; j < N; j++) bareFrame(j);
   mixer.stopAllAction(); on.fill(0);
   if (gc) gc();
-  const h0 = process.memoryUsage().heapUsed, b0 = allocated();
+  const h0 = process.memoryUsage().heapUsed;
   const t0 = performance.now();
   for (let i = 2000; i < 2000 + N; i++) frame(i);
   const ms = performance.now() - t0;
-  const b1 = allocated();
   if (gc) gc();
   const h1 = process.memoryUsage().heapUsed;
-  const c0 = allocated();
-  for (let j = 0; j < N; j++) bareFrame(j);
-  const c1 = allocated();
-  const ctl = (b1 - b0) / N, bare = (c1 - c0) / N;
   check('alloc: retained heap growth, 10k updates (gc before/after)', (h1 - h0) / 1024, -Infinity, 1024, 'KB');
-  check('alloc: controller - bare mixer, per update', ctl - bare, -Infinity, 512, 'B');
   check('perf: 10k updates (5 states, synced tree, root motion)', ms, 0, 100, 'ms');
   check('alloc: events fired during the run', n, 100, Infinity);
-  results.push(`NOTE  allocation per update: controller ${ctl.toFixed(0)} B, bare mixer replaying the same actions ${bare.toFixed(0)} B` +
-    `${exact ? '' : ' (heapUsed deltas, approximate: Node < 26)'}. update() creates no objects; the difference is V8 HeapNumber ` +
-    'boxing of doubles passed between calls (harmless, short-lived, but real)');
+  // exact bytes per update of each loop forced into TurboFan, over one GC-free window (test/helpers/alloc.mjs), the
+  // controller's and three's functions forced with it: the bare mixer replaying the recorded actions first (it wraps
+  // around its 10 000 recorded frames), then the controller (frames continue from 12 000). Bounded, not byte-stable:
+  // three.module.js has internal functions no list reaches, whose tier moves the readings (M4: bare 290-293, controller
+  // 252.6 on 5 runs in 6, 349 on one; the other order or fewer forced functions reads 252-370), so the gate is the
+  // difference, with the budget it had.
+  let fi = 2000 + N, fj = 0;
+  const force = [...functionsOf(AnimationController), ...functionsOf(THREE)];
+  const mb = bytesPerCall((k) => { for (let q = 0; q < k; q++) { bareFrame(fj); fj = (fj + 1) % N; } }, 2000, { warm: 2000, budget: Infinity, force });
+  const m = bytesPerCall((k) => { for (let q = 0; q < k; q++) frame(fi++); }, 2000, { warm: 2000, budget: 1024, force });
+  if (ALLOC.ok) {
+    check('alloc: controller - bare mixer, per update (TurboFan)', m.per - mb.per, -Infinity, 512, 'B');
+    // the control: the same controller loop plus a 1072 B array per update (its control at budget 1024) reads over
+    check('alloc: control: controller + 1072 B per update - bare mixer is detected', m.control - mb.per, 512, Infinity, 'B');
+  }
+  results.push(`NOTE  alloc: controller ${describe(m, 'update')}`, `NOTE  alloc: bare mixer replaying the same actions ${describe(mb, 'update')}`);
   if (!gc) results.push('NOTE  no gc available: retained heap growth measured without gc (timing is the reliable check)');
 }
 

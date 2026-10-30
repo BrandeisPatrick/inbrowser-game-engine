@@ -7,7 +7,7 @@
 // moon gate, uniforms, temporal ping-pong / freshness with and without a CameraHistory, no allocation per frame),
 // with a fake and a real (headless) Atmosphere. Pixels and timings are measured in the browser (ENGINE.md, measurement protocol).
 // Run: node test/volumetric.mjs
-import v8 from 'node:v8';
+import { bytesPerCall, gate } from './helpers/alloc.mjs';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { VolumetricPass, VOLUMETRIC_DEFAULTS } from '../src/render/passes/VolumetricPass.js';
@@ -28,15 +28,9 @@ const fmt = (x) => (Math.abs(x) < 1e-3 && x !== 0 ? x.toExponential(2) : x.toFix
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const DEG = Math.PI / 180;
 
-performance.now(); process.memoryUsage();
-function measureAlloc(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  fn();
-  const h1 = process.memoryUsage().heapUsed;
-  return { bytes: h1 - h0, gcs: prof.stop().statistics.length };
-}
+// allocation gates (test/helpers/alloc.mjs: exact bytes per call of TurboFan code, with a control) report through these
+const note = (s) => results.push(`NOTE  ${s}`);
+const inRange = (name, v, lo, hi, unit) => check(name, Number.isFinite(v) && v >= lo && v <= hi, `${Number.isFinite(v) ? +v.toFixed(3) : v} ${unit} in [${lo}, ${hi}]`);
 
 // composite Simpson over [a, b] with n (even) intervals
 function simpson(f, a, b, n) {
@@ -558,9 +552,7 @@ function historyTap(tex, w, h, huv, z, zPrev) {
   atmo.st.ready = false; frame(); atmo.st.ready = true; frame();
   check('after zero output: fresh', u.uTemporal.value.y === 1);
   // no allocation per frame (begin / render / end), steady state
-  for (let i = 0; i < 50000; i++) frame();
-  const a = measureAlloc(() => { for (let i = 0; i < 100000; i++) frame(); });
-  check('render() x100000 with CameraHistory: no GC, heap growth < 128 KB (one allocation per frame: > 1.2 MB)', a.gcs === 0 && a.bytes < 128 * 1024, `${a.gcs} GCs, ${a.bytes} B`);
+  gate(inRange, note, 'render() with CameraHistory (begin / render / end)', bytesPerCall((n) => { for (let i = 0; i < n; i++) frame(); }, 50000), { unit: 'frame' });
   vol.dispose();
 }
 
@@ -602,9 +594,7 @@ function historyTap(tex, w, h, huv, z, zPrev) {
   hist.begin(W, H); vol.render(r, null, readBuffer); hist.end();
   vol.history = null; vol.render(r, null, readBuffer);
   check('history replaced (null -> CameraHistory -> null, as PostFX setGBuffer): fresh each time', swapped && u.uTemporal.value.y === 1 && (vol.render(r, null, readBuffer), u.uTemporal.value.y === 0));
-  for (let i = 0; i < 50000; i++) vol.render(r, null, readBuffer);
-  const a = measureAlloc(() => { for (let i = 0; i < 100000; i++) vol.render(r, null, readBuffer); });
-  check('render() x100000 without history: no GC, heap growth < 128 KB', a.gcs === 0 && a.bytes < 128 * 1024, `${a.gcs} GCs, ${a.bytes} B`);
+  gate(inRange, note, 'render() without history', bytesPerCall((n) => { for (let i = 0; i < n; i++) vol.render(r, null, readBuffer); }, 50000), { unit: 'frame' });
   vol.dispose();
 }
 
@@ -639,9 +629,7 @@ function historyTap(tex, w, h, huv, z, zPrev) {
   }
   check("Atmosphere sunset sweep: gate 1 exactly while the cascades are the sun's", agree && nSun > 0 && nMoon > 0, `${nSun} sun / ${nMoon} moon`);
   atmo.setTime(15.5);
-  for (let i = 0; i < 50000; i++) vol.render(r, null, readBuffer);
-  const a = measureAlloc(() => { for (let i = 0; i < 100000; i++) vol.render(r, null, readBuffer); });
-  check('render() x100000 on a real Atmosphere (its shadowCascadeInfo): no GC, heap growth < 128 KB', a.gcs === 0 && a.bytes < 128 * 1024, `${a.gcs} GCs, ${a.bytes} B`);
+  gate(inRange, note, 'render() on a real Atmosphere (its shadowCascadeInfo)', bytesPerCall((n) => { for (let i = 0; i < n; i++) vol.render(r, null, readBuffer); }, 50000), { unit: 'frame' });
   check('dispose: no throw', !throws(() => vol.dispose()));
 }
 

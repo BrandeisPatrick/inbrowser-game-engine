@@ -3,7 +3,7 @@
 // and edge), GJK / EPA against the analytic box paths, warm-start keys under jitter, heightfield, static boxes,
 // trimesh one-sidedness and merging, compounds, and that collide() does not allocate. No browser, no WebGL.
 // Run: node test/dyn-narrowphase.mjs  (imports the modules by path until the physics index exports them)
-import v8 from 'node:v8';
+import { bytesPerCall, describe, gate } from './helpers/alloc.mjs';
 import { mulberry32, hashF64Array } from '../src/core/mathDet.js';
 import { BodyStore, ContactBuffer, WORLD_BODY, pairKey } from '../src/physics/dynamics/state.js';
 import { sphere, capsule, box, convex, trimesh, compound } from '../src/physics/dynamics/shapes.js';
@@ -11,6 +11,7 @@ import { Narrowphase } from '../src/physics/dynamics/narrowphase.js';
 
 let failures = 0;
 const results = [];
+const note = (s) => results.push(`NOTE  ${s}`);
 function check(name, value, lo = 1, hi = lo, unit = '') {
   if (typeof value === 'boolean') value = value ? 1 : 0;
   const ok = Number.isFinite(value) && value >= lo && value <= hi;
@@ -767,34 +768,23 @@ function grid(n, size) {
   tests.push(['static box (box)', () => np.collideStaticBox(B, sb, 59, -1, -1, 61, 1, 1, 3, C)]);
   tests.push(['heightfield (box)', () => np.collideHeightfield(B, hf, flat, C)]);
   // Every call site sees every shape type before anything is measured (warm-up interleaved, so the optimised code is
-  // the final polymorphic one); then blocks of N calls per type, heapUsed before / after (byte-exact while no GC runs:
-  // a block with a GC is discarded). process.memoryUsage() itself costs ~256 B; one boxed double per call would be
-  // 16 B x N. (v8 total_allocated_bytes is too coarse here: it moves in ~256 KB allocation-buffer steps.)
+  // the final polymorphic one); then per type the exact bytes per call of a loop forced into TurboFan over a GC-free
+  // window, with a control (test/helpers/alloc.mjs). One boxed double per call would read 16 B.
   const N = 10000;
-  const loop = (fn, n) => { for (let i = 0; i < n; i++) { C.clear(); fn(); } };
-  for (let r = 0; r < 4; r++) for (const [, fn] of tests) loop(fn, 5000);
-  performance.now(); process.memoryUsage();
+  const runOf = (fn) => (n) => { for (let i = 0; i < n; i++) { C.clear(); fn(); } };
+  for (let r = 0; r < 4; r++) for (const [, fn] of tests) runOf(fn)(5000);
   const lines = [];
   for (const [name, fn] of tests) {
     C.clear(); fn();
-    const pts = C.count;
-    let minB = Infinity, minMs = Infinity;
-    for (let k = 0; k < 5; k++) {
-      const prof = new v8.GCProfiler();
-      prof.start();
-      const h0 = process.memoryUsage().heapUsed, t0 = performance.now();
-      loop(fn, N);
-      const ms = performance.now() - t0, h1 = process.memoryUsage().heapUsed;
-      const gcs = prof.stop().statistics.length;
-      if (ms < minMs) minMs = ms;
-      if (gcs === 0 && h1 - h0 < minB) minB = h1 - h0;
-    }
-    const heap = Number.isFinite(minB) ? `${String(minB).padStart(8)} B / ${N} calls` : '   (GC in every block: the heightAt(x, z, y) callback receives boxed doubles)';
-    lines.push(`      ${name.padEnd(20)} ${String(pts).padStart(2)} pts  ${(minMs * 1000 / N).toFixed(2).padStart(7)} us/call  ${heap}`);
-    if (name.startsWith('heightfield')) continue;
-    check(`alloc: ${name}, heap growth over ${N} calls`, minB, 0, 1024, 'B');
+    const pts = C.count, run = runOf(fn);
+    let minMs = Infinity;
+    for (let k = 0; k < 3; k++) { const t0 = performance.now(); run(N); minMs = Math.min(minMs, performance.now() - t0); }
+    // the heightAt(x, z, y) callback receives boxed doubles: reported, not gated
+    const hf = name.startsWith('heightfield'), m = bytesPerCall(run, N, { budget: hf ? Infinity : 1 });
+    lines.push(`      ${name.padEnd(20)} ${String(pts).padStart(2)} pts  ${(minMs * 1000 / N).toFixed(2).padStart(7)} us/call  ${m.per.toFixed(3).padStart(8)} B / call`);
+    if (hf) note(`alloc: ${name} (not gated): ${describe(m)}`); else gate(check, note, name, m);
   }
-  results.push('INFO  per pair type (after interleaved warm-up; best of 5 blocks):\n' + lines.join('\n'));
+  results.push('INFO  per pair type (after interleaved warm-up):\n' + lines.join('\n'));
 }
 
 console.log(results.join('\n'));

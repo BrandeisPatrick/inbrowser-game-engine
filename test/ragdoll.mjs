@@ -489,27 +489,23 @@ function drop(table, rigOpts, seconds, onStep) {
 // ---- 7. allocation of update() -------------------------------------------------------------------------------------------
 {
   const v8 = await import('node:v8'), vm = await import('node:vm');
+  const { bytesPerCall, functionsOf, gate } = await import('./helpers/alloc.mjs');
+  const THREE = await import('three');
   let gc = globalThis.gc;
   if (!gc) { try { v8.setFlagsFromString('--expose-gc'); gc = vm.runInNewContext('gc'); } catch { gc = null; } }
-  const exact = v8.getHeapStatistics().total_allocated_bytes !== undefined;   // Node >= 26
-  const allocated = exact ? () => v8.getHeapStatistics().total_allocated_bytes : () => process.memoryUsage().heapUsed;
   const { rd } = drop(PROC, {}, 1);
   const N = 100000;
   const loop = (n) => { for (let i = 0; i < n; i++) rd.update(); };
-  loop(N);                                          // warm: the loop and update() optimised before measuring
-  let probe = Infinity;                             // the counter read itself (a stats object)
-  for (let k = 0; k < 5; k++) { const a = allocated(); probe = Math.min(probe, allocated() - a); }
+  // exact bytes per update() in TurboFan (the loop, Ragdoll's methods and the three math they enter forced; one
+  // GC-free window; a control): a real allocation per bone (an Euler update, a boxed number per call) reads >= 200 B
+  const force = functionsOf(Ragdoll, DynamicsWorld, THREE.Object3D, THREE.Vector3, THREE.Quaternion, THREE.Euler, THREE.Matrix4);
+  gate(check, note, 'update()', bytesPerCall(loop, N, { force }), { unit: 'update' });
   if (gc) gc();
   const h0 = process.memoryUsage().heapUsed;
-  const t0 = allocated();
   loop(N);
-  const per = (allocated() - t0 - probe) / N;
   if (gc) gc();
-  const h1 = process.memoryUsage().heapUsed;
-  // a real allocation per bone (an Euler update, a boxed number per call) reads >= 200 B per update()
-  check('alloc: bytes allocated per update() (100 000 calls, heap counter)', per, -Infinity, 16, 'B');
-  check('alloc: retained heap growth over 100 000 update() calls (gc before/after)', (h1 - h0) / 1024, -Infinity, 64, 'KB');
-  note(`alloc: ${per.toFixed(2)} B per update() ${exact ? '(total_allocated_bytes)' : '(heapUsed delta, approximate: Node < 26)'}, probe ${probe} B${gc ? '' : '; no gc available'}`);
+  check('alloc: retained heap growth over 100 000 update() calls (gc before/after)', (process.memoryUsage().heapUsed - h0) / 1024, -Infinity, 64, 'KB');
+  if (!gc) note('alloc: no gc available: retained growth measured without gc');
   // every allocation sampled (garbage included) and attributed: nothing in Ragdoll.js or three's math it calls
   try {
     const inspector = await import('node:inspector/promises');

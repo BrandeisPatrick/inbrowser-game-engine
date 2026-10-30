@@ -13,7 +13,7 @@
 //            only on a state change, the fallback warning once, no allocation per render.
 // Real compilation and the image are checked in the browser by the lead (PostFX wiring is the compositor's).
 // Run: node test/ssr-ao.mjs
-import v8 from 'node:v8';
+import { bytesPerCall, gate } from './helpers/alloc.mjs';
 import { createHash } from 'node:crypto';
 import * as THREE from 'three';
 import { Pass } from 'three/addons/postprocessing/Pass.js';
@@ -34,15 +34,9 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
 const sameBits = (a, b) => a.elements.every((v, i) => Object.is(v, b.elements[i]));
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 
-performance.now(); process.memoryUsage();
-function measureAlloc(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  fn();
-  const h1 = process.memoryUsage().heapUsed;
-  return { bytes: h1 - h0, gcs: prof.stop().statistics.length };
-}
+// allocation gates (test/helpers/alloc.mjs: exact bytes per call of TurboFan code, with a control) report through these
+const note = (s) => results.push(`NOTE  ${s}`);
+const inRange = (name, v, lo, hi, unit) => check(name, Number.isFinite(v) && v >= lo && v <= hi, `${Number.isFinite(v) ? +v.toFixed(3) : v} ${unit} in [${lo}, ${hi}]`);
 
 // enough of WebGLRenderer for the passes' render() (draws are no-ops); records bound targets and clears
 function stubRenderer() {
@@ -224,11 +218,7 @@ const gbStub = { normal: new THREE.Texture() };
   check('no depth texture: cleared, not traced', r.clears === clears + 2 && r.bound === p._rt);
 
   // nothing allocates per render
-  const loop = () => { for (let i = 0; i < 200000; i++) p.render(r, null, read); };
-  loop(); // warm: the measured closure itself optimised (compiled code would count as heap growth)
-  const a = measureAlloc(loop);
-  check(`render() x200000: heap growth ${a.bytes} B`, a.bytes < 64 * 1024);
-  check(`render() x200000: GCs ${a.gcs}`, a.gcs === 0);
+  gate(inRange, note, 'SSR render()', bytesPerCall((n) => { for (let i = 0; i < n; i++) p.render(r, null, read); }, 50000), { unit: 'frame' });
   check('dispose: no throw', !throws(() => { p.dispose(); q.dispose(); }));
 }
 
@@ -527,11 +517,7 @@ const AO_DEFINES_SHA = '137fff3a94eb4cc7bfe6c9a08d7db6bb6651272d1952187bb619ac45
     check('same G-buffer / same normals again: no program change', gm.version === v0 + 1);
 
     // nothing allocates per render on the G-buffer path
-    const loop = () => { for (let i = 0; i < 200000; i++) g.render(r, null, read); };
-    loop(); // warm, as above
-    const a = measureAlloc(loop);
-    check(`AO render() x200000 ('gbuffer'): heap growth ${a.bytes} B`, a.bytes < 64 * 1024);
-    check(`AO render() x200000 ('gbuffer'): GCs ${a.gcs}`, a.gcs === 0);
+    gate(inRange, note, "AO render() ('gbuffer')", bytesPerCall((n) => { for (let i = 0; i < n; i++) g.render(r, null, read); }, 50000), { unit: 'frame' });
 
     // back to 'depth': the 0.7.0 program exactly
     g.normals = 'depth';

@@ -5,6 +5,7 @@
 // order, particleAabb and the DynamicsClient guard. No browser, no WebGL. Run: node test/dyn-cloth.mjs
 import v8 from 'node:v8';
 import vm from 'node:vm';
+import { bytesPerCall, functionsOfDir, gate } from './helpers/alloc.mjs';
 import { DynamicsWorld } from '../src/physics/dynamics/DynamicsWorld.js';
 import { ParticleStore, PFLAG, PCON, ParticleConstraints, Cloth, Rope } from '../src/physics/dynamics/particles.js';
 import { box, sphere, capsule } from '../src/physics/dynamics/shapes.js';
@@ -480,13 +481,12 @@ function clothScene() {
 }
 
 // --- 8. allocation: step() with a 32 x 32 cloth (+ a rope holding a body by an attachment and a body tether) ----------
-// The dyn-world pattern (retained growth with gc before / after) plus the GC count over 500 steps (GCProfiler), and the
-// bytes per step as the slope of GC-free heap growth between 100- and 600-step runs (best of 3; dyn-broadphase's
-// method: V8's total_allocated_bytes counter swings by KBs between runs here, and the sampling heap profiler
-// deoptimizes the running code, which then boxes doubles). A warm step boxes only h / dt once (~32 B).
+// Exact bytes per step of TurboFan code (test/helpers/alloc.mjs: the stepping loop and every dynamics function it
+// enters forced into TurboFan, one GC-free window, a control), and the retained growth with gc before / after.
 {
   let gc = globalThis.gc;
   if (!gc) { try { v8.setFlagsFromString('--expose-gc'); gc = vm.runInNewContext('gc'); } catch { gc = null; } }
+  const force = await functionsOfDir(new URL('../src/physics/dynamics/', import.meta.url));
   const mixed = () => {
     const w = new DynamicsWorld({ maxParticles: 1200, sleep: false });
     Cloth.grid(w, { nx: 32, ny: 32, spacing: 0.05, position: [0, 3, 0], quaternion: Q_FLAT, pins: ['top-left', 'top-right'] });
@@ -495,40 +495,19 @@ function clothScene() {
     return w;
   };
   const w = mixed();
-  run(w, 300);   // warm-up (JIT, feedback)
-  performance.now();
+  run(w, 300);   // warm-up (feedback)
   if (gc) gc();
   const h0 = process.memoryUsage().heapUsed;
-  const prof = new v8.GCProfiler();
-  prof.start();
   run(w, 500);
-  const gcs = prof.stop().statistics.length;
   if (gc) gc();
-  const h1 = process.memoryUsage().heapUsed;
-  check('alloc: GCs during 500 steps (32 x 32 cloth + rope holding a body; load noise)', gcs, 0, 1);
-  check('alloc: retained heap growth over 500 steps (gc before / after)', (h1 - h0) / 1024, -Infinity, 16, 'KB');
-  const growth = (world) => {
-    const grow = (n) => {
-      if (gc) gc();
-      const pr = new v8.GCProfiler();
-      pr.start();
-      const a = process.memoryUsage().heapUsed;
-      run(world, n);
-      const b = process.memoryUsage().heapUsed;
-      return pr.stop().statistics.length ? Infinity : b - a;   // a GC inside invalidates the round
-    };
-    const best = (n) => { let m = Infinity; for (let r = 0; r < 3; r++) m = Math.min(m, grow(n)); return m; };
-    const g600 = best(600);
-    return { slope: (g600 - best(100)) / 500, mean: g600 / 600 };
-  };
+  check('alloc: retained heap growth over 500 steps (gc before / after)', (process.memoryUsage().heapUsed - h0) / 1024, -Infinity, 16, 'KB');
   const wc = new DynamicsWorld({ maxParticles: 1200, sleep: false });
   Cloth.grid(wc, { nx: 32, ny: 32, spacing: 0.05, position: [0, 3, 0], quaternion: Q_FLAT, pins: ['top-left', 'top-right'] });
   run(wc, 400);
-  const gcw = growth(wc), gm = growth(w);
-  check('alloc: heap growth per warm step, 32 x 32 cloth (GC-free slope 100 -> 600)', gcw.slope, -Infinity, 64, 'B');
-  check('alloc: heap growth per step, cloth + rope + body (600 GC-free steps, mean)', gm.mean, -Infinity, 256, 'B');
-  note(`alloc: ${gcw.slope.toFixed(1)} B/step cloth world (slope), ${gm.mean.toFixed(1)} B/step mean with the rope + body; ${w.stats.constraints} constraints, ${w.stats.particles} particles`);
-  if (!gc) note('no gc available: growth measured without a gc first');
+  gate(check, note, 'step(), 32 x 32 cloth', bytesPerCall((n) => run(wc, n), 300, { warm: 300, budget: 64, force }), { budget: 64, unit: 'step' });
+  gate(check, note, 'step(), cloth + rope + body', bytesPerCall((n) => run(w, n), 300, { warm: 300, budget: 256, force }), { budget: 256, unit: 'step' });
+  note(`alloc: ${w.stats.constraints} constraints, ${w.stats.particles} particles`);
+  if (!gc) note('no gc available: retained growth measured without a gc first');
 }
 
 // --- 9. solver hook order and the state each hook sees -----------------------------------------------------------------

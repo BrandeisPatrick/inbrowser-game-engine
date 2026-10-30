@@ -1,12 +1,12 @@
 // Headless checks for the core kernel: Events, Clock, Entity / EntitySystem, mathDet (no browser, no WebGL).
 // Run: node test/core.mjs (imports the modules by path until the core index exports them).
-import v8 from 'node:v8';
 import * as THREE from 'three';
 import { Events } from '../src/core/Events.js';
 import { Clock } from '../src/core/Clock.js';
 import { Entity, EntitySystem } from '../src/core/Entity.js';
 import { mulberry32, hashU32, hashF64, hashF64Array, detAtan, detAtan2, detAsin, detAcos, detSqrt, clamp } from '../src/core/mathDet.js';
 import { mulberry32 as noiseMulberry32 } from '../src/render/noise.js';
+import { atLeast, bytesPerCall, gate } from './helpers/alloc.mjs';
 
 let failures = 0;
 const results = [];
@@ -18,20 +18,14 @@ function check(name, value, lo = 1, hi = lo, unit = '') {
   return ok;
 }
 const fmt = (x) => (!Number.isFinite(x) ? String(x) : Number.isInteger(x) ? String(x) : Math.abs(x) < 1e-3 ? x.toExponential(2) : x.toFixed(2)).padStart(10);
+const note = (s) => results.push(`NOTE  ${s}`);
 
-// Bytes allocated and GCs run while fn() executes (young-generation growth with a GC count: if no GC ran, the
-// heap delta is what fn allocated).
-performance.now(); process.memoryUsage(); // first use initializes lazily; keep that out of the measurements
-function measureAlloc(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
+// Wall time of fn(); allocation is counted exactly over TurboFan code by test/helpers/alloc.mjs (bytesPerCall + gate).
+performance.now(); // first use initializes lazily; keep that out of the measurements
+function timed(fn) {
   const t0 = performance.now();
   fn();
-  const ms = performance.now() - t0;
-  const h1 = process.memoryUsage().heapUsed;
-  const gcs = prof.stop().statistics.length;
-  return { bytes: h1 - h0, gcs, ms };
+  return performance.now() - t0;
 }
 
 // ================================================================================================= Events
@@ -142,17 +136,14 @@ function measureAlloc(fn) {
   ev.on('hit', (a) => { sum = (sum - a) | 0; });
   const run = (n) => { for (let i = 0; i < n; i++) ev.emit('hit', i, 7, payload); };
   run(2e5); run(2e5); // warm up (JIT)
-  const m = measureAlloc(() => run(1e6));
-  check('events: 1e6 emits x 3 listeners (ms)', m.ms, 0, 150, 'ms');
-  check('events: GCs during 1e6 emits', m.gcs, 0, 0);
-  check('events: heap growth over 1e6 emits (bytes)', m.bytes, -Infinity, 65536, 'B'); // 1 object per emit = 16+ MB
+  check('events: 1e6 emits x 3 listeners (ms)', timed(() => run(1e6)), 0, 150, 'ms');
+  gate(check, note, 'events: emit() x 3 listeners', bytesPerCall(run, 1e5, { warm: 2e4 }), { unit: 'emit' });
   // control: the same measurement sees a per-emit array copy
   const fns = [(a) => { sum = (sum + a) | 0; }];
   let last = null;
   const leaky = (n) => { for (let i = 0; i < n; i++) { last = fns.slice(); last[0](i); } };
-  leaky(1e4);
-  const ml = measureAlloc(() => leaky(1e6));
-  check('events: control (slice per emit) is detected', ml.gcs > 0 || ml.bytes > 1e6);
+  const ml = bytesPerCall(leaky, 1e4);
+  atLeast(check, note, 'events: control: a slice per emit is detected (B / emit)', ml, 16);
 }
 
 // ================================================================================================= Clock
@@ -344,10 +335,8 @@ const consistent = (sys) => {
   for (let i = 0; i < 1000; i++) { const e = new Entity(); e.addComponent(new Mover()); sys.add(e); }
   const frames = (n) => { for (let f = 0; f < n; f++) { sys.fixedUpdate(1 / 120); sys.update(1 / 60, 0.5); sys.lateUpdate(1 / 60, 0.5); } };
   frames(1000);
-  const m = measureAlloc(() => frames(1000));
-  check('system: 3e6 hook calls (ms)', m.ms, 0, 200, 'ms');
-  check('system: GCs during 1000 frames', m.gcs, 0, 0);
-  check('system: heap growth over 3e6 hook calls (bytes)', m.bytes, -Infinity, 65536, 'B');
+  check('system: 3e6 hook calls (ms)', timed(() => frames(1000)), 0, 200, 'ms');
+  gate(check, note, 'system: 1000 components x 3 phases', bytesPerCall(frames, 1000, { warm: 200 }), { unit: 'frame' });
 }
 
 // ================================================================================================= mathDet

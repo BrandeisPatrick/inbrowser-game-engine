@@ -5,7 +5,7 @@
 // new define blocks stripped, default = no new define / pass / target, option validation, set() / get() paths that
 // create and dispose passes, the colorSource chain, allocation-free _source / set / render, timings keys.
 // Run: node test/postfx-options.mjs
-import v8 from 'node:v8';
+import { BOXED, atLeast, bytesPerCall, gate } from './helpers/alloc.mjs';
 import crypto from 'node:crypto';
 import * as THREE from 'three';
 import { CameraHistory, jitterPattern } from '../src/render/CameraHistory.js';
@@ -34,16 +34,9 @@ const sameBits = (a, b) => a.elements.every((v, i) => Object.is(v, b.elements[i]
 const maxDiff = (a, b) => a.elements.reduce((m, v, i) => Math.max(m, Math.abs(v - b.elements[i])), 0);
 const maxDiffIdentity = (m) => maxDiff(m, new THREE.Matrix4());
 
-performance.now(); process.memoryUsage();
+// allocation: exact bytes per call of TurboFan code, with a control (test/helpers/alloc.mjs)
 let _sink = null; // allocation checks store results here so V8 cannot elide them
-function measureAlloc(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  fn();
-  const h1 = process.memoryUsage().heapUsed;
-  return { bytes: h1 - h0, gcs: prof.stop().statistics.length };
-}
+const note = (s) => results.push(`NOTE  ${s}`);
 
 // pixel position (drawing-buffer px, y up) of a world point through a projection * view
 const _v = new THREE.Vector4();
@@ -194,10 +187,7 @@ function pixel(proj, cam, p, W, H) {
   }
 
   // nothing allocates per frame
-  for (let i = 0; i < 50000; i++) { hist.begin(W, H); hist.end(); } // warm (optimised code, no IC growth)
-  const a = measureAlloc(() => { for (let i = 0; i < 200000; i++) { hist.begin(W, H); hist.end(); } });
-  check('begin()/end() x200000: heap growth', a.bytes, -Infinity, 64 * 1024, 'B');
-  check('begin()/end() x200000: GCs', a.gcs, 0, 0);
+  gate(check, note, 'CameraHistory begin() / end()', bytesPerCall((n) => { for (let i = 0; i < n; i++) { hist.begin(W, H); hist.end(); } }, 50000), { unit: 'frame' });
 }
 
 // ================================================================================================= TAA weights
@@ -207,18 +197,14 @@ function pixel(proj, cam, p, W, H) {
   check('weights: centre heaviest, symmetric (no jitter)', w[4] > w[1] && w[1] === w[3] && w[3] === w[5] && w[5] === w[7] && w[0] === w[8]);
   const half = taaFilterWeights(0.5, 0);
   check('weights: jitter +0.5 px x -> columns -1 and 0 equal', Math.abs(half[3] - half[4]) < 1e-7 && half[5] < half[3]);
-  // bytes per call, not a GC count: the loop passes a computed jitter, which V8 boxes (one 16 B HeapNumber per call)
-  // whenever it does not inline the call, ~800 KB over 50000 calls, enough for one scavenge on a small young generation
-  // (the CI runner: 'no GC' failed there while the function allocates nothing). A Float32Array per call is ~100+ B,
-  // which the control (no `out`: the default parameter allocates one) shows is caught.
+  // the jitters come boxed from an array (a jitter computed in the loop is a double V8 boxes, 16 B, whenever it does not
+  // inline the call: the test's cost, not the function's). A Float32Array per call is ~100+ B, which the second
+  // control (no `out`: the default parameter allocates one) shows is caught.
   const out = new Float32Array(9);
-  const run = (n, o) => { for (let i = 0; i < n; i++) _sink = taaFilterWeights(i % 7 * 0.1 - 0.3, 0.2, o); };
-  run(50000, out); // warm
-  const per = allocated(() => run(50000, out)) / 50000;
-  check('taaFilterWeights into out: bytes / call (one boxed double = 16)', per, -Infinity, 24, 'B');
-  run(50000, undefined);
-  const ctl = allocated(() => run(50000, undefined)) / 50000;
-  check('taaFilterWeights control: without out, its Float32Array per call is detected', ctl, 48, Infinity, 'B');
+  const jit = BOXED(...Array.from({ length: 7 }, (_, k) => k * 0.1 - 0.3));
+  gate(check, note, 'taaFilterWeights into out', bytesPerCall((n) => { for (let i = 0; i < n; i++) _sink = taaFilterWeights(jit[i % 7], 0.2, out); }, 50000));
+  const ctl = bytesPerCall((n) => { for (let i = 0; i < n; i++) _sink = taaFilterWeights(jit[i % 7], 0.2); }, 2000);
+  atLeast(check, note, 'taaFilterWeights control: without out, its Float32Array per call is detected', ctl, 48);
 }
 
 // ================================================================================================= resolveAA
@@ -458,17 +444,6 @@ const atmoStub = () => ({
 // spy on a pass instance's dispose (counts calls, still disposes)
 const spyDispose = (p) => { const box = { n: 0 }, d = p.dispose; p.dispose = function () { box.n++; return d.call(this); }; return box; };
 const keysOf = (fx) => fx.composer.passes.map((p) => fx._passKeys.get(p)).join();
-// bytes allocated by fn: heap growth plus what the GCs during it freed
-function allocated(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  fn();
-  const h1 = process.memoryUsage().heapUsed;
-  let freed = 0;
-  for (const g of prof.stop().statistics) freed += g.beforeGC.heapStatistics.usedHeapSize - g.afterGC.heapStatistics.usedHeapSize;
-  return h1 - h0 + freed;
-}
 {
   // ---- shader texts
   const fFrag = FINAL_SHADER.fragmentShader, tFrag = TAA_SHADER.fragmentShader;
@@ -742,26 +717,25 @@ function allocated(fn) {
 
   // ---- allocation-free: _source, value set() paths, render() with every pass on
   const rb = s.composer.readBuffer;
-  for (let i = 0; i < 20000; i++) { s._source(rb); s._source(rb, 1); s._source(rb, 2); }
-  check('_source() x600000: bytes allocated', allocated(() => { for (let i = 0; i < 200000; i++) { s._source(rb); s._source(rb, 1); s._source(rb, 2); } }), -Infinity, 64 * 1024, 'B');
+  gate(check, note, '_source() x 3 sources', bytesPerCall((n) => { for (let i = 0; i < n; i++) { _sink = s._source(rb); _sink = s._source(rb, 1); _sink = s._source(rb, 2); } }, 50000), { unit: '3 calls' });
   // value paths one at a time (a harness sweeps one knob), small integers. V8 boxes a double (16 B HeapNumber) that a
   // megamorphic keyed store writes into a double-represented field (ssr.thickness after set() has seen every path):
   // at most that per call, i.e. no object / array / closure / string (>= 32 B each without pointer compression)
   s.set('lut', lut4);
-  let worst = 0, worstPath = '';
+  let worst = null, worstPath = '';
   for (const [path, base] of [['ssr.thickness', 0], ['ssr.steps', 20], ['volumetric.intensity', 0], ['volumetric.density', 0], ['motionBlur.strength', 0],
     ['motionBlur', 0], ['motionBlur.maxBlur', 20], ['dof.focusDistance', 10], ['dof.fStop', 1], ['lut.strength', -1], ['taa.sharpen', -1]]) {
-    const run = (n) => { for (let i = 0; i < n; i++) s.set(path, base + (i & 1) + 1); };
-    run(20000);
-    const b = allocated(() => run(50000)) / 50000;
-    if (b > worst) { worst = b; worstPath = path; }
+    const m = bytesPerCall((n) => { for (let i = 0; i < n; i++) s.set(path, base + (i & 1) + 1); }, 20000, { budget: 20 });
+    if (!worst || !(m.per <= worst.per)) { worst = m; worstPath = path; }
   }
-  check(`value set() paths: worst bytes / call (${worstPath}; one boxed double = 16)`, worst, -Infinity, 20, 'B');
-  // render(): a budget, not a measure of real allocation: the figure (~600 B / frame) is dominated by the measurement
-  // itself (a sampling profiler shows ~14 B / frame allocated, and a fresh instance matches 0.7.0's)
-  for (let i = 0; i < 300; i++) s.render(0.016);
-  const perFrame = allocated(() => { for (let i = 0; i < 3000; i++) s.render(0.016); }) / 3000;
-  check('render() every pass on (stub renderer): bytes / frame, budget', perFrame, -Infinity, 2048, 'B');
+  gate(check, note, `value set() paths, worst (${worstPath}; one boxed double = 16)`, worst, { budget: 20 });
+  // render() with every pass on, stub renderer: a budget. Every pass's render() is forced into TurboFan (the composer
+  // calls them through its list, so none is inlined, and once per frame they sit in Maglev for thousands of frames);
+  // then it reads 160 B / frame: ~10 numbers stored into three.js uniform { value } fields (a field that also holds
+  // textures and vectors, so TurboFan boxes each computed number: Bloom's threshold / knee / strength / radius, uTime,
+  // uExposure, near / far, TAA's and Exposure's), which no per-frame JS can avoid for a uniform that changes (uTime)
+  const passRenders = [...new Set(s.composer.passes.map((p) => p.render))];
+  gate(check, note, 'render() every pass on (stub renderer)', bytesPerCall((n) => { for (let i = 0; i < n; i++) s.render(0.016); }, 3000, { budget: 256, force: passRenders }), { budget: 256, unit: 'frame' });
 
   check('dispose (every pass on): no throw', !throws(() => { all.dispose(); s.dispose(); gfx.dispose(); fx.dispose(); }));
 }
