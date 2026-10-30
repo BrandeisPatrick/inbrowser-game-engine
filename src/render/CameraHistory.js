@@ -60,7 +60,7 @@ export function jitterPattern(pattern = 'halton16') {
 export class CameraHistory {
   /**
    * @param {THREE.PerspectiveCamera|THREE.OrthographicCamera} camera
-   * @param {object} [o] pattern ('halton16'), jitter (true)
+   * @param {{ pattern?: string, jitter?: boolean }} [o] pattern ('halton16'), jitter (true)
    */
   constructor(camera, { pattern = 'halton16', jitter = true } = {}) {
     this.camera = camera;

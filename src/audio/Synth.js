@@ -56,7 +56,11 @@ export function loopSource(ctx, buffer, rate = 1) {
   return s;
 }
 
-/** BiquadFilterNode; only the given parameters are set (others keep WebAudio defaults). */
+/**
+ * BiquadFilterNode; only the given parameters are set (others keep WebAudio defaults).
+ * @param {AudioContext} ctx
+ * @param {{ type?: BiquadFilterType, frequency?: number, Q?: number, gain?: number }} [o]
+ */
 export function makeFilter(ctx, { type = 'lowpass', frequency, Q, gain } = {}) {
   const f = ctx.createBiquadFilter();
   f.type = type;

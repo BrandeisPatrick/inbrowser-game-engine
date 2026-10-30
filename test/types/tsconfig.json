@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "types": [],
+    "baseUrl": "../..",
+    "paths": { "@vibe/engine": ["types/index.d.ts"], "@vibe/engine/*": ["types/*/index.d.ts"] }
+  },
+  "files": ["check.ts"]
+}

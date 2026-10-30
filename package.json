@@ -1,7 +1,7 @@
 {
   "name": "@vibe/engine",
-  "version": "0.9.0",
-  "description": "Browser game engine on Three.js/WebGL2: fixed-step core with CPU/GPU profiler, deterministic JS vehicle physics, atmosphere + post-processing, instancing/LOD/impostor utilities, data-driven city worlds (OpenStreetMap + terrain), traffic AI, input, camera rigs, synth audio, DOM UI widgets",
+  "version": "1.0.0",
+  "description": "Browser game engine on Three.js/WebGL2: fixed-step core with services and a CPU/GPU profiler, deterministic pure-JS physics (query hub, vehicle and character controllers, unified XPBD rigid bodies / joints / cloth / ropes / soft bodies / buoyancy / fracture), a measured render pipeline (forward MSAA or G-buffer + TAA, clustered lights, cascaded shadows, SSR, volumetrics, water, motion blur, depth of field, LUTs, GPU particles), animation with IK and ragdolls, input, camera rigs, synth audio, DOM UI widgets and data-driven city worlds (OpenStreetMap + terrain, traffic AI)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BrandeisPatrick/inbrowser-game-engine.git"
@@ -13,22 +13,54 @@
   "type": "module",
   "main": "./src/index.js",
   "module": "./src/index.js",
+  "types": "./types/index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./core": "./src/core/index.js",
-    "./physics": "./src/physics/index.js",
-    "./render": "./src/render/index.js",
-    "./anim": "./src/anim/index.js",
-    "./input": "./src/input/index.js",
-    "./camera": "./src/camera/index.js",
-    "./audio": "./src/audio/index.js",
-    "./ui": "./src/ui/index.js",
-    "./world": "./src/world/index.js",
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./core": {
+      "types": "./types/core/index.d.ts",
+      "default": "./src/core/index.js"
+    },
+    "./physics": {
+      "types": "./types/physics/index.d.ts",
+      "default": "./src/physics/index.js"
+    },
+    "./render": {
+      "types": "./types/render/index.d.ts",
+      "default": "./src/render/index.js"
+    },
+    "./anim": {
+      "types": "./types/anim/index.d.ts",
+      "default": "./src/anim/index.js"
+    },
+    "./input": {
+      "types": "./types/input/index.d.ts",
+      "default": "./src/input/index.js"
+    },
+    "./camera": {
+      "types": "./types/camera/index.d.ts",
+      "default": "./src/camera/index.js"
+    },
+    "./audio": {
+      "types": "./types/audio/index.d.ts",
+      "default": "./src/audio/index.js"
+    },
+    "./ui": {
+      "types": "./types/ui/index.d.ts",
+      "default": "./src/ui/index.js"
+    },
+    "./world": {
+      "types": "./types/world/index.d.ts",
+      "default": "./src/world/index.js"
+    },
     "./tools/*": "./tools/*",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
+    "types",
     "tools",
     "README.md",
     "LICENSE",
@@ -43,17 +75,28 @@
     "pack:check": "npm pack --dry-run",
     "types": "tsc -p tsconfig.types.json",
     "smoke": "node test/browser/smoke.mjs",
-    "bench": "node test/browser/bench.mjs"
+    "bench": "node test/browser/bench.mjs",
+    "prepack": "npm run types",
+    "types:check": "npm run types && tsc -p test/types"
   },
   "keywords": [
     "game-engine",
     "threejs",
     "webgl2",
     "browser",
-    "driving",
     "physics",
+    "xpbd",
+    "rigid-body",
+    "cloth",
+    "soft-body",
+    "ragdoll",
+    "deferred",
+    "taa",
+    "clustered-lighting",
     "procedural",
-    "openstreetmap"
+    "openstreetmap",
+    "driving",
+    "character-controller"
   ],
   "peerDependencies": {
     "three": ">=0.170"

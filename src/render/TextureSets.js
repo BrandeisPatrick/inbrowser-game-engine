@@ -655,6 +655,8 @@ function procJob(kind, seed, tint, prio) {
  * anisotropy, sRGB albedo / linear data. `maps`: which of map / normalMap / roughnessMap / aoMap to fetch. With a
  * manifest, a set id it does not list resolves to null without fetching. Returns null when the albedo is missing.
  * `ktx2: false` forces the JPGs for this call. Never throws.
+ * @param {string} id
+ * @param {{ renderer?: import('three').WebGLRenderer|null, base?: string, manifest?: object|null, maps?: string[], defaultSize?: number, ktx2?: boolean }} [o]
  */
 export async function loadTextureSet(id, { renderer = null, base = textureBase(), manifest = null, maps = ['map', 'normalMap', 'roughnessMap'], defaultSize = 2, ktx2 } = {}) {
   const m = manifest && manifest.sets && Object.values(manifest.sets).find((e) => e.id === id);
@@ -696,6 +698,9 @@ export async function loadTextureSet(id, { renderer = null, base = textureBase()
  * whichever of `.ktx2` / `.jpg` TextureSets.options.arrayKtx2 picks (default: the smaller download); both are packed
  * into the same RGBA8 layers, so the shaders that sample the arrays see the same layout either way. `free: false`
  * keeps albedo.image.data / normal.image.data after the GPU upload (default: freed). Never throws for missing files.
+ * @param {import('three').WebGLRenderer} renderer
+ * @param {Array<string|object>} sets
+ * @param {{ size?: number, base?: string, manifest?: object, onProgress?: Function, ktx2?: boolean, free?: boolean }} [o]
  */
 export async function makeTextureArray(renderer, sets, { size = 1024, base = textureBase(), manifest, onProgress, ktx2, free = true } = {}) {
   // procedural layers go to the worker pool as soon as they are known: id-less sets now (before the manifest), roles

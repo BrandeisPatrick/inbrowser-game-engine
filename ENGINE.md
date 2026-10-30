@@ -1,17 +1,24 @@
-# Browser game engine — extracted from Roadster
+# Browser game engine — `@vibe/engine` 1.0
 
-> This document moved with the engine into its own repository (`inbrowser-game-engine`, npm package `@vibe/engine`).
-> Paths written as `engine/src/...` are relative to a game that embeds the engine as `engine/` (roadster does);
-> here they are `src/...`. Plain `src/`, `dev/` and `tools/` paths refer to the roadster game, `samples/canyon-run`
-> and `test/car-sim.mjs` live here.
+> Design notes, measurements and the record of decisions of `@vibe/engine` (repository `inbrowser-game-engine`): the
+> browser game engine extracted from the Roadster flying-car game and grown, over the 0.5.0 - 1.0.0 phases, into a
+> general engine. Paths written as `engine/src/...` in the older sections are relative to a game that embeds the
+> engine as `engine/` (roadster does); here they are `src/...`. Sections by release: 0.5.0 "Core services",
+> "Character stack", "Measurement protocol"; 0.6.0 "DynamicsWorld"; 0.7.0 and 0.8.0 "Render pipeline"; 0.9.0
+> "Unified XPBD"; 1.0 "Rapier plug-in contract", "Packaging", "Measured (1.0)". `CHANGELOG.md` has the per-release
+> lists.
 
-Goal: turn the systems built for the flying-car game into a reusable, optimised engine for
-**browser games** (WebGL2 via Three.js now, WebGPU later), with first-class lighting and physics,
-usable for this driving game and for other genres. Zero build-time dependencies beyond `three`;
-optional heavier backends (Rapier WASM physics, KTX2 textures) are plug-ins.
+Goal, reached with 1.0: a reusable, optimised engine for **browser games** (WebGL2 via Three.js, with data layouts a
+WebGPU port can reuse), with first-class lighting and physics, usable for the driving game and for other genres: a
+fixed-step core with services, a deterministic pure-JS physics stack (query hub, vehicle and character controllers, the
+unified XPBD solver for rigid bodies, joints, particles, cloth, ropes, soft bodies, buoyancy and fracture), a measured
+render pipeline (forward MSAA or G-buffer + TAA, clustered lights, cascades, SSR, volumetrics, water, lens passes, GPU
+particles), animation (state machine, IK, ragdolls), input, camera rigs, synth audio, UI widgets and the data-driven
+city world. Zero runtime dependencies beyond `three`; Rapier stays a possible plug-in behind the `DynamicsWorld`
+contract ("Rapier plug-in contract"), KTX2 textures an optional loader.
 
-Code lives in `engine/` (imported by the game as `../engine/src/index.js`; later published as
-`@vibe/engine`). The game in `src/` becomes a thin consumer: map data, car tuning, HUD skin.
+Code lives in `src/` (one folder per layer, each a package subpath); games import `@vibe/engine` /
+`@vibe/engine/<layer>`. The Roadster game is a thin consumer: map data, car tuning, HUD skin.
 
 ## Layers (each folder is independently importable; lower layers never import higher ones)
 
@@ -19,29 +26,41 @@ Order: core < physics < render < anim / input / camera / audio / ui < world.
 
 | Layer | Folder | What moves in from the game | New |
 |---|---|---|---|
-| core | `engine/src/core` | fixed-step loop (120 Hz, max substeps), resize, adaptive pixel ratio (`main.js`) | `Engine` (renderer + scene + systems registry + render interpolation), `Profiler` (CPU timers per system, GPU timer queries), `Events`, `Clock`, debug overlay |
-| render | `engine/src/render` | `sky.js` (sun/sky/clouds/fog/time of day), PostFX (GTAO, bloom, SMAA, grading), shadow cascades, texture-set loader + canvas fallbacks (`textures.js`), vegetation impostor baker, facade texture arrays | `InstancedPool` + `LODGroup` + `Impostor` utilities, `MaterialLib`, `DecalTrail`, pooled `Particles`, `Culling` (frustum + distance per chunk) |
-| physics | `engine/src/physics` | `Physics.js` vehicle model (arcade-realistic, deterministic, Node-testable), AABB `ColliderGrid`, heightfield queries, OBB-vs-AABB SAT, sub-stepped sweeps | `PhysicsWorld` interface (static colliders, heightfield, dynamic AABBs, raycast/spherecast), `VehicleController` (wheels + thrusters as a controller on any body), optional `RapierBackend` for general rigid bodies |
+| core | `src/core` | fixed-step loop (120 Hz, max substeps), resize, adaptive pixel ratio (`main.js`) | `Engine` (renderer + scene + systems registry + render interpolation, `clock`), `Profiler` (CPU timers per system, GPU timer queries, `benchThroughput`), `Events`, `Clock`, `Entity` / `EntitySystem`, `Assets` (glTF with KTX2 / Draco / meshopt, textures, LUTs, HDR, audio), deterministic math (`MathDet`), the bench harness (`createBenchHarness`) |
+| render | `src/render` | `Atmosphere` (sun / sky / clouds / fog / time of day), PostFX, shadow cascades, texture-set loader + canvas fallbacks (`TextureSets`), vegetation impostor baker, facade texture arrays | `PostFX` (Scene -> Exposure -> AO -> SSR -> Volumetric -> TAA -> MotionBlur -> DoF -> Bloom -> Final: GTAO, bloom, FXAA / 4x MSAA / TAA, filmic grade, 3D LUT), `GBuffer` + `CameraHistory`, `ClusteredLights`, 1-4 cascades with 'pcf' / 'fast' / 'pcss' kernels, `GpuParticleSystem`, `InstancedPool` + `LODGroup` + `Impostor` utilities, `MaterialPatches`, `DecalTrail`, pooled `ParticleSystem`, `ChunkCuller`, `PhysicsDebug`, `SoftMeshes` / `FractureMesh` |
+| physics | `src/physics` | `VehicleController` (arcade-realistic, deterministic, Node-testable), AABB `ColliderGrid`, heightfield queries, OBB-vs-AABB SAT, sub-stepped sweeps | `PhysicsWorld` (query hub: static colliders, heightfield, dynamic providers, raycast / spherecast), `CharacterController` (kinematic capsule; pushes and rides `DynamicsWorld` bodies), `DynamicsWorld` (`dynamics/`: unified XPBD rigid bodies, joints, particles, cloth, ropes, soft bodies, coupling, buoyancy, fracture) and its `DynamicsClient` worker |
 | world | `engine/src/world` | **extracted**: terrain heightfield + draping, map data + procedural fallback, road network, building builder + facade layers, props / furniture / vehicle library, vegetation, traffic AI, water / shore / boats / far relief; bakers in `engine/tools` (the Bay Bridge and the landmarks stay in the game as MapWorld plugins) | `MapWorld` (options + plugin hooks), data contracts for city / terrain / farland JSON, parameterised bakers; `TileStreamer` (building tiles built / freed around the camera, see "Streaming"); traffic AI in a Web Worker (`TrafficSim` core, see "Traffic simulation") |
-| anim | `engine/src/anim` | — | `AnimationController` (state machine + 1D blend trees + transitions + root motion over `AnimationMixer`), `TwoBoneIK`, CCD IK helper (0.5.0) |
-| input | `engine/src/input` | `Input.js` (keyboard/gamepad, analog smoothing, edge flags) | touch/virtual sticks, rebinding |
-| camera | `engine/src/camera` | `ChaseCamera` (modes, occlusion avoidance) | `CameraRig` base, orbit/free/cinematic rigs |
-| audio | `engine/src/audio` | WebAudio synth bus (`Audio.js`) | `AudioBus` (mixer, positional emitters, synth voices) |
+| anim | `src/anim` | — | `AnimationController` (state machine + 1D blend trees + transitions + root motion over `AnimationMixer`), `TwoBoneIK`, `CCDIK`, `Ragdoll` (skeleton -> capsules + joints on the dynamics world, 0.9.0) |
+| input | `src/input` | `Input.js` (keyboard / gamepad, analog smoothing, edge flags) | `InputMap` (action maps, contexts, rebinding, `alwaysOn`), `VehicleInput`, `CharacterInput`, `PointerLock` |
+| camera | `src/camera` | `ChaseCamera` (modes, occlusion avoidance) | `CameraRig` base + `CameraCollision`, `ChaseRig`, `OrbitRig`, `FreeFlyRig`, `ThirdPersonRig`, `FirstPersonRig` |
+| audio | `src/audio` | WebAudio synth bus (`Audio.js`) | `AudioBus` (mixer, positional emitters, synth voices), `SamplePlayer` (decoded samples) |
 | ui | `engine/src/ui` | HUD widgets (gauges, minimap, flash, attitude indicator) | DOM widget kit, theme |
 
-## Engine API (target)
+## Engine API
+What the samples do (`samples/*/main.js` are the reference), with the real signatures:
 ```js
-import { Engine, Atmosphere, PostFX, PhysicsWorld, VehicleController, Terrain, Input, ChaseCamera } from '../engine/src/index.js';
-const engine = new Engine({ container, fixedHz: 120, maxSubsteps: 4, targetFps: 60, adaptiveResolution: true, shadows: 'cascaded', postfx: true });
-engine.addSystem(world);          // { load?(progress), fixedUpdate?(dt), update?(dt, alpha), dispose?() }
-engine.addSystem(vehicle);
-engine.camera.rig = new ChaseCamera(engine.camera, { target: vehicle.object3d, physics: engine.physics });
-await engine.load(onProgress);
+import { Engine, Atmosphere, PostFX, PhysicsWorld, DynamicsWorld, attachToPhysicsWorld } from '@vibe/engine';
+const physics = new PhysicsWorld();                                           // static boxes, heightfield, dynamic providers
+const engine = new Engine({ container, fixedHz: 120, maxSubsteps: 4, physics, targetFps: 0 });
+const { scene, camera, renderer } = engine;
+const atmo = new Atmosphere({ scene, renderer, camera, timeOfDay: 'noon', shadows: { cascades: 3, kernel: 'pcss' } });
+const postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio,
+  gbuffer: true, aa: 'taa', ssr: true, volumetric: true });                  // every 0.7.0+ feature is an option, off by default
+engine.renderFn = (sc, cam, dt) => postfx.render(dt);
+const dyn = new DynamicsWorld({ physics, substeps: 4, maxParticles: 4096 }); // rigid bodies, joints, particles, cloth, ...
+attachToPhysicsWorld(dyn, physics);                                           // the hub sees the bodies as 'rigid' colliders
+engine.addSystem({ fixedUpdate: (dt) => dyn.step(dt) }, 'dynamics'); // { load?(progress), earlyUpdate?, fixedUpdate?(dt), update?(dt, alpha), lateUpdate?(dt), dispose?() }
+engine.addSystem({ update: (dt) => rig.update(dt) }, 'camera');
+engine.addSystem({ lateUpdate: (dt) => atmo.update(camera.position, dt) }, 'world');
+await engine.load(onProgress);                                                // every system's load(progress), weighted
 engine.start();
 ```
-- `fixedUpdate(dt)` runs at the fixed rate; `update(dt, alpha)` runs per frame with interpolation factor.
-- `engine.physics` is a `PhysicsWorld` (static AABB grid + heightfield + dynamic bodies + raycasts).
-- `engine.profiler.frame` gives per-system CPU ms and per-pass GPU ms (when `EXT_disjoint_timer_query_webgl2` exists).
+- `fixedUpdate(dt)` runs at the fixed rate (`engine.clock` pauses or scales it); `update(dt, alpha)` runs per frame
+  with the interpolation factor; registration order is run order unless a system passes `priority`; `enabled = false` skips a system.
+- `engine.physics` is the `PhysicsWorld` the controllers and rigs query; `DynamicsWorld` bodies reach it through
+  `attachToPhysicsWorld` (or the world's own `colliderProvider`).
+- `engine.profiler.frame` gives per-system CPU ms and per-pass GPU ms (`EXT_disjoint_timer_query_webgl2`);
+  `Profiler.benchThroughput` is the GPU-synchronised bench every number in this document comes from.
 
 ## Lighting
 - Atmosphere: physically based sky, sun disc + lensflare, procedural cloud layer, height fog, time of day (hours or
@@ -309,9 +328,9 @@ shapes keep rolling; the all-box pit in `test/dyn-world.mjs` sleeps in 9 s) in-t
 with 0.5 ms of main-thread time; 5 ragdolls (11 capsules, 10 joints each) settle and sleep within 17 s. The
 sandbox's bench poses reset the scene and hand-step a fixed number of steps, so their captures reproduce across
 page loads (stack overview / close hashes equal on every load).
-What is not there yet: continuous collision detection (fast thin bodies can tunnel), compounds off their centroid
-rotate about the shape origin, the car treats bridged bodies as immovable walls (two-way vehicle coupling is
-Phase 5, as are cloth, ropes, soft bodies, buoyancy and fracture).
+What is not there (1.0): continuous collision detection (fast thin bodies can tunnel, and destruction stays local for
+the same reason: "Unified XPBD (0.9.0)"), compounds off their centroid rotate about the shape origin, and the car
+treats bridged bodies as immovable walls (the character couples both ways since 0.9.0, the vehicle does not).
 
 ### Unified XPBD (0.9.0): particles, cloth, ropes, soft bodies, coupling, buoyancy, fracture, ragdolls
 The rigid solver gains a particle store and a solver-plugin seam, and everything deformable is built on it; the rigid
@@ -385,6 +404,43 @@ needs continuous collision (a 20 m/s ball first contacts 12 cm deep at 1/120 s) 
 1.0+ items. The rolling-contact fix (anchors of a body whose top-level shape is a sphere or a capsule are re-seated
 on the surface every substep; compounds keep material anchors) changes every scene with rolling spheres / capsules
 (the sandbox stack ball's captures moved at 1280x720), car-sim and world-build pins are untouched.
+
+## Rapier plug-in contract (1.0)
+The engine's own solver is `DynamicsWorld`; a Rapier (or Jolt, or any other) backend is a class with the same surface,
+so that everything reading a dynamics world keeps working. What reads it, and therefore what a replacement must
+provide (the header of `physics/dynamics/DynamicsWorld.js` is the normative text):
+- **Readers.** `attachToPhysicsWorld(dyn, physics)` (bridge.js) publishes `dyn.bodies` to the query hub: it needs a
+  `BodyStore`-shaped `bodies` (dense ids, `alive` / `type` / `flags` / `kind` / `layer`, `aabb` (6 per body, margin
+  included), `vel`), or the world's own `colliderProvider` / `queryColliders(x, z, r, out)` appending the pooled
+  `{ minX .. maxZ, kind, id, vx, vz }` records. `render/PhysicsDebug.js` calls `debugLines(out, max)`. `DynamicsClient`
+  (the worker protocol) needs `serialize()` / `from(desc)` and reads poses as `bodies.pos` (3 per id) / `bodies.quat`
+  (4 per id). The samples' `BodyPools`, `Ragdoll`, `FracturedBody`, `CharacterController.attachDynamics` and the
+  particle plugins read `bodies.pos / quat / vel / angVel / invMass` by id and call the methods below.
+- **Methods.** `addBody({ type, shape, position, quaternion, mass | density, friction, restitution, linearDamping,
+  angularDamping, layer, mask, kind, userData, noGravity }) -> id` (stable ids, lowest free first; shapes from
+  `dynamics/shapes.js`: sphere / capsule / box / convex / trimesh / compound, read through `describeShape`),
+  `removeBody(id)`, `setPose` / `getPose` (positional or array / `{x, y, z, w}` forms), `setVelocity` / `getVelocity`,
+  `applyImpulse` / `applyForce` / `applyTorque`, `setKinematicTarget`, `setGravity`, `addJoint(desc) -> id` /
+  `removeJoint(id)` with the `JOINT` types fixed / ball / hinge / slider / distance / d6 (limits, motor, compliance,
+  damping, `breakForce`, `collideConnected`), `wake` / `sleep` / `isAwake` / `isActive`, `step(dt)` (fixed dt, no
+  allocation once warm), `raycast(origin, dir, maxDist, opts)` / `shapeCast` / `overlap` / `pointInBody`,
+  `getGroundHeight` / `surfaceAt` passthrough to `physics`, `serialize()` / `static from(desc, { physics })`,
+  `dispose()`.
+- **Fields and events.** `contacts` (last step: `a`, `b`, point, normal, `depth`, `lambdaN` / `lambdaT`), `began` /
+  `ended` (`{ count, keys }` pair keys `a * 65536 + b`), `stats` (bodies, awake, pairs, contacts, joints, islands, ms
+  with `timing`), `time`, `stepCount`, `gravity`, `substeps`.
+- **Not part of the contract.** `particles`, `constraints`, `addParticleSolver`, `recollidePairs`, `particleAabb`:
+  the particle store and its solver plugins (cloth, ropes, soft bodies, coupling, buoyancy, the fracture impact
+  plugin) are the XPBD solver's own and stay on `DynamicsWorld`; a Rapier world would carry rigid bodies and joints
+  only, and the sandbox's 0.9.0 scenes would stay on the JS solver.
+- **Determinism.** The `dyn-*` suites pin this solver's bits (golden hashes, 1e-9 range checks); a WASM backend with
+  f32 math will not reproduce them and needs its own pins. `test/car-sim.mjs` and `test/world-build.mjs` do not
+  touch the dynamics world and stay the gate for any backend.
+An adapter would own a `RAPIER.World`, create its colliders from the shape descriptors, mirror every body's pose /
+velocity into a `BodyStore` after each `step` (so the readers above work unchanged), map the joint descriptors to
+Rapier's impulse joints, answer the queries through Rapier's query pipeline and build its `contacts` from the event
+queue. Nothing in the engine imports `DynamicsWorld` by class check: the samples and the controllers only call the
+surface above.
 
 ## World layer (`engine/src/world`, extracted)
 `MapWorld` composes a whole city from map data + options + plugins; every system is also usable on its own.
@@ -749,11 +805,15 @@ sample now uses the engine behaviour directly.
 
 
 ## Packaging
-`engine/` is the npm package `@vibe/engine` (MIT, `engine/package.json`, subpath exports per layer, `files` =
-`src` + `tools`). The root `package.json` declares it as a workspace, so the game and `samples/canyon-run`
-import `@vibe/engine` / `@vibe/engine/<layer>`; no file in `src/`, `samples/` or `dev/` imports `engine/src`
-by relative path any more. Layer `index.js` files are the public surface (deep imports are unsupported).
-`CHANGELOG.md` tracks releases; `npm run pack:check` inside `engine/` verifies the tarball.
+This repository is the npm package `@vibe/engine` (MIT): pure ES modules, `three >= 0.170` the only (peer) dependency,
+subpath exports per layer (`@vibe/engine`, `@vibe/engine/<layer>`, `@vibe/engine/tools/*`), each with a `types`
+condition pointing at the declarations `npm run types` emits from the JSDoc into `types/` (gitignored; `prepack` emits
+them, so `npm pack` / `npm publish` ship them: `files` = `src`, `types`, `tools`, README, LICENSE, CHANGELOG; ~285
+files, ~1.1 MB). `npm run types:check` compiles `test/types/check.ts`, a strict TypeScript consumer of the root and
+every subpath with `skipLibCheck` off, so a JSDoc gap that would emit a wrong type fails CI (1.0 fixed 20 of them).
+Layer `index.js` files are the public surface (deep imports are unsupported). The Roadster game embeds the repository
+as the `engine/` submodule listed in its `workspaces`. `CHANGELOG.md` tracks releases; `npm run pack:check` lists the
+tarball.
 
 ## Render interpolation (fix for judder, 2026-10-18)
 Physics runs at a fixed 120 Hz while frames arrive at a variable rate, so a frame may contain 1, 2 or 3 steps.
@@ -819,7 +879,7 @@ a crest jump entered "flight mode" so the hover assist floated the car down.
 | flight-mode entries without thrust | 6 | 0 |
 | impacts | 21513 (pilot in the parking lane / median) | 26 |
 
-`tools/car-sim.mjs` grew 24 suspension checks (rest, ring-down, 12 cm kerb, rounded slope break, dive / squat / roll
+`test/car-sim.mjs` (then `tools/car-sim.mjs`) grew 24 suspension checks (rest, ring-down, 12 cm kerb, rounded slope break, dive / squat / roll
 signs, ledge drop, arming, traffic shove, reset on a slope); 73 checks pass.
 
 **Known map artifact (fixed in the deck solver, 2026-10-19).** The feet of the freeway and Transbay bus ramps at 1st,
@@ -971,7 +1031,7 @@ unchanged).
 - `samples/character/`: third-person playground (glTF via `?model=` or `tools/fetch-models.mjs`, procedural rigged
   fallback built in code, so no binary asset is committed).
 
-## Measurement protocol (0.5.0)
+## Measurement protocol
 Every sample page exposes `window.__sample` (`createBenchHarness`): `pose(id)` stops the loop, places the camera,
 runs the sample's `after` (culling, LOD partitions, atmosphere) and `quiet` (particles off, exposure frozen) hooks
 and renders two frames with dt = 0; `bench(frames)` is `Profiler.benchThroughput` over `engine.renderFn` (CPU
@@ -999,6 +1059,14 @@ reproduces most poses but not all: Canyon Run's `straight` and `ahead` hashes dr
 app's browser (or as same-page A/B through `run(plan)`), and the smoke's job is boot + stability within a load. `npm run smoke` asserts two equal captures per pose
 on every page; `npm run bench` writes `bench/results/<date>-<HHMM>-<page>-<WxH>-<label>.json`.
 
+The 1.0 sweep (`bench/release-sweep.js`; results `bench/results/2026-10-30-*-p6-*.json`; tables in "Measured
+(1.0)"): one plan per sample page, poses x settings `default` / `gbuffer+taa` / `max` (every 0.7.0 - 0.9.0 render
+feature on, plus the night / clustered / refraction variants where the page has them), run from the page's console in
+the desktop app's browser pane at `?bench=1&size=3024x1964` and `2560x1440`, 24 frames per cell after 3 warm-up
+frames, the pixel diff against the `default` row of the same pose. GPU numbers are comparable only from an idle GPU:
+the first 1.0 run read 2.5-3x the 0.9.0 figures while another process held the GPU at 99 % (`ioreg -r -c
+IOAccelerator -d 1` shows the utilisation), and was discarded.
+
 ### Phase 1 baseline (0.5.0, `bench/results/2026-10-29-*-p1-baseline.json`)
 Headed Chrome 142 (Playwright, `--use-angle=metal`), Apple M4, pixel ratio 1, 24 frames per pose after 3 warm-up frames,
 engine defaults of each sample (Canyon Run: 'fast' shadows, MSAA under 4 Mpx; city: engine defaults, traffic on).
@@ -1018,3 +1086,6 @@ from warm runs in one environment.
 | city | street | 13.31 | 10.27 | 172 | 0.86 M |
 | city | crossing | 12.65 | 9.99 | 174 | 0.84 M |
 | city | high | 13.25 | 10.42 | 176 | 0.86 M |
+
+## Measured (1.0): every sample, every pose, both sizes
+MEASURED_1_0_PLACEHOLDER

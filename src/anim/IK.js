@@ -30,6 +30,7 @@
 // whatever the caller last made it, so update it yourself before solve().
 // Chain fields besides target / effector / links (iteration, minAngle, maxAngle, blendFactor) and per-link fields
 // (limitation, rotationMin, rotationMax, enabled; give the link as { bone, ... }) pass through to CCDIKSolver.
+import * as THREE from 'three';
 import { Vector3, Quaternion } from 'three';
 import { CCDIKSolver } from 'three/addons/animation/CCDIKSolver.js';
 

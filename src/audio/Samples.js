@@ -145,6 +145,11 @@ export class SamplePlayer {
     return this._play(buffer, o, e);
   }
 
+  /**
+   * @param {AudioBuffer} buffer
+   * @param {{ gain?: number, rate?: number, loop?: boolean, offset?: number, fadeIn?: number, bus?: * }} [o]
+   * @param {*} [emitter]
+   */
   _play(buffer, { gain = 1, rate = 1, loop = false, offset = 0, fadeIn = 0, bus } = {}, emitter) {
     const ctx = this.bus.ctx;
     if (!ctx || !buffer) return INERT;

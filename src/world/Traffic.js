@@ -89,10 +89,10 @@ function patchTrafficMaterial(m) {
 export class Traffic {
   /**
    * @param {object} o
-   * @param {World} o.world  needs getGroundHeight(x,z,y) (height bake) + getSpawn(); optional world.player / world.camera
+   * @param {object} o.world  needs getGroundHeight(x,z,y) (height bake) + getSpawn(); optional world.player / world.camera
    * @param {object} o.data  city.json (signals)
-   * @param {RoadNetwork} o.net
-   * @param {Props} o.props  traffic signal phases (props.signals[].state)
+   * @param {import('./RoadNetwork.js').RoadNetwork} o.net
+   * @param {import('./Props.js').Props} o.props  traffic signal phases (props.signals[].state)
    * @param {number} [o.seed]
    * @param {number} [o.count] vehicles (default world.opts.traffic ?? 250 - a number, or { count }; 0/false disables)
    * @param {THREE.Camera} [o.camera] for out-of-view respawns (also: setCamera, world.camera)

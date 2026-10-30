@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0 — 2026-10-30
+The release of the 1.0 roadmap (phases 0.5.0 - 0.9.0, ENGINE.md): a general engine with its graphics and physics pushed as
+far as the phases took them, measured. No engine behaviour changes against 0.9.0: every default renders and steps as
+0.9.0 (`npm run smoke` hashes equal; the car-sim / world-build pins untouched since 0.4.0).
+- Package: the TypeScript declarations emitted from the JSDoc ship with the package (`types/`, emitted by `prepack`)
+  and are exported for the root and every subpath (`"types"`, `exports[*].types`); a strict TypeScript consumer
+  compiles against them with `skipLibCheck` off (`test/types/check.ts`, `npm run types:check`, run by CI). JSDoc fixes
+  in 20 source files for that (option bags and overrides that emitted wrong or incomplete types; the two a consumer
+  hit first: the `Cloth.grid` / `Rope.chain` option lists and `Events.emit` with its four positional args optional;
+  no runtime change). The package description and keywords say what the engine is now.
+- CI runs on Node 26, the V8 the allocation budgets are calibrated on (0.9.0 note), and runs `types:check`.
+- Docs: README and ENGINE.md consolidated for 1.0 (the stale SMAA and Rapier-backend claims gone; "Engine API" is the
+  real one; "Rapier plug-in contract" states the DynamicsWorld surface a replacement must provide; "Measurement
+  protocol" covers the 1.0 sweep, whose plan is `bench/release-sweep.js`).
+- Measured (1.0): every sample page, every pose, at 3024x1964 and 2560x1440, engine defaults against everything on, in
+  the desktop app's browser (`bench/results/2026-10-30-*-p6-*.json`; tables in ENGINE.md "Measured (1.0)").
+  MEASURED_SUMMARY_PLACEHOLDER
+
 ## 0.9.0 — 2026-10-29
 Unified XPBD (phase 5 of the 1.0 roadmap, ENGINE.md "Unified XPBD (0.9.0)"): particles, cloth, ropes, soft bodies,
 particle-rigid coupling, buoyancy, pre-fractured bodies, character dynamics and ragdolls, all on the 0.6.0 solver; a

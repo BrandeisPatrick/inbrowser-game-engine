@@ -749,6 +749,10 @@ export const Cloth = Object.freeze({
    * A rectangular nx x ny particle grid with structural, shear, bending (and tether / attachment) constraints.
    * @param {object} world  a DynamicsWorld with maxParticles > 0
    * @param {object} [o]  see the file header
+   * @param {number} [o.nx=32]  particles along local +X
+   * @param {number} [o.ny=32]  particles along local +Y
+   * @param {number} [o.spacing=0.05]  rest distance between neighbours (m)
+   * @param {number} [o.mass=1]  total mass (kg), shared equally
    * @param {number[]|{x,y,z}} [o.position=[0,0,0]]  the CENTRE of the rest rectangle (not a corner)
    * @param {number[]|{x,y,z,w}} [o.quaternion=[0,0,0,1]]  rows along its local +X (i) and +Y (j), normal local +Z
    * @param {number} [o.stretch=0]  structural compliance (m/N; 0 = inextensible, tethers on)
@@ -904,6 +908,14 @@ export const Rope = Object.freeze({
    * A particle chain from `from` to `to` with distance, bending (and tether / attachment) constraints.
    * @param {object} world  a DynamicsWorld with maxParticles > 0
    * @param {object} [o]  see the file header
+   * @param {number[]|{x,y,z}} [o.from=[0,0,0]]  first particle
+   * @param {number[]|{x,y,z}} [o.to=[0,-1,0]]  last particle
+   * @param {number} [o.segments=20]  links (segments + 1 particles)
+   * @param {number} [o.mass=0.5]  total mass (kg)
+   * @param {number} [o.radius=0.02]  particle radius for collision (m)
+   * @param {number} [o.stretch=0]  distance compliance (0 = inextensible, tethers on)
+   * @param {number} [o.bend=1e-4]  bending compliance
+   * @param {Array<string|object>} [o.pins=['from']]  'from' / 'to' / indices / { index, body, ... }
    */
   chain(world, o = {}) {
     const P = needParticles(world, 'Rope.chain');

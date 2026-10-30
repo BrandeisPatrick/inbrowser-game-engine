@@ -40,8 +40,13 @@ export class Widget {
 
   setVisible(on) { if (this.el) this.el.style.display = on ? '' : 'none'; return this; }
 
+  /**
+   * Per-frame update; subclasses take further positional args (see each widget).
+   * @param {number} dt
+   * @param {...*} rest
+   */
   // eslint-disable-next-line no-unused-vars
-  update(dt) {}
+  update(dt, ...rest) {}
 
   dispose() { this.unmount(); }
 }

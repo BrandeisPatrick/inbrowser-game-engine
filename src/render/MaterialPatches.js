@@ -147,6 +147,9 @@ function patchFragment(fs, patches) {
 /**
  * Install patches on a material (chains an existing onBeforeCompile). Returns the material; the merged uniforms
  * are on material.userData.patchUniforms and the patch list on material.userData.patches.
+ * @param {import('three').Material} material
+ * @param {object[]} patches
+ * @param {{ cacheKey?: string }} [o]  cacheKey: appended to customProgramCacheKey (defaults to the patch names)
  */
 export function applyPatches(material, patches, { cacheKey } = {}) {
   const prev = material.onBeforeCompile;

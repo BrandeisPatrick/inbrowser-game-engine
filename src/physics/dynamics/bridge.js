@@ -36,7 +36,7 @@ const _attached = new WeakMap(); // dyn -> Map<PhysicsWorld, provider>
  * Publish dyn's moving bodies to `physicsWorld` as dynamic colliders; sets `dyn.physics` when it is unset.
  * Attaching the same pair again replaces the previous provider (e.g. to change the options).
  * @param {object} dyn            DynamicsWorld (anything with a BodyStore `bodies`)
- * @param {PhysicsWorld} physicsWorld
+ * @param {import('../PhysicsWorld.js').PhysicsWorld} physicsWorld
  * @param {object} [opts]
  * @param {number} [opts.mask=-1]     only bodies with (bodies.layer & mask) !== 0
  * @param {Function} [opts.filter]    filter(id) => false leaves a body out (e.g. the car's kinematic proxy)

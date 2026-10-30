@@ -185,7 +185,9 @@ export const GROUND_SETS = { asphalt: 'asphalt_02', asphalt2: 'clean_asphalt', s
 
 /**
  * Load the facade/roof PBR array and the ground texture sets. Never throws.
- * @returns {Promise<{albedo:THREE.DataArrayTexture, normal:THREE.DataArrayTexture, sizes:number[], tintable:number[], loaded:number, ground:object}>}
+ * @param {import('three').WebGLRenderer} renderer
+ * @param {{ size?: number, onProgress?: Function }} [o]
+ * @returns {Promise<{albedo:import('three').DataArrayTexture, normal:import('three').DataArrayTexture, sizes:number[], tintable:number[], loaded:number, ground:object}>}
  */
 export async function loadPbrTextures(renderer, { size = 1024, onProgress } = {}) {
   const base = textureBase();

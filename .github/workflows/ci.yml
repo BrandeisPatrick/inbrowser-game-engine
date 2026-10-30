@@ -31,4 +31,4 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: npm run types
+      - run: npm run types:check
