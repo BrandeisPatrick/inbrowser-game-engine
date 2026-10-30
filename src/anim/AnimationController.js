@@ -16,6 +16,7 @@
 //   });
 //   anim.play('move');                                  // a state or a tree; crossfades from whatever is current
 //   anim.setParam('speed', v); anim.update(dt);         // per frame (allocation-free)
+//   anim.resync();                                      // after bones were written by hand (Ragdoll.deactivate)
 //   anim.events.on('marker', (name, state) => {});      // 'loop' (state), 'end' (state); last arg = the controller
 //   anim.applyRootMotion();                             // or read anim.rootMotion.deltaPosition / deltaYaw
 //
@@ -451,6 +452,26 @@ export class AnimationController {
     _v.copy(R.deltaPosition).multiply(target.scale).applyQuaternion(target.quaternion);
     target.position.add(_v);
     if (R.deltaYaw !== 0) target.quaternion.premultiply(_q.setFromAxisAngle(_UP, R.deltaYaw));
+    return this;
+  }
+
+  /**
+   * Make the mixer write every animated channel on its next update. A THREE.PropertyMixer only writes a value that
+   * differs from the one it wrote last, so after bones were written by hand (a Ragdoll's deactivate(), a pose restore,
+   * an IK pass kept across frames) a channel whose blended clip value has not changed since (a constant track, a held
+   * pose) would keep the hand-written value. Call it once after writing, before the next update(). Allocation-free; the
+   * mixer's original (rest) values, which partial weights blend towards, are kept. Reads the mixer's bindings
+   * (three's internal `_bindings`, each a PropertyMixer with the buffer layout [incoming | accu0 | accu1 | orig | ...]).
+   * @returns {this}
+   */
+  resync() {
+    const bindings = this.mixer._bindings || [];
+    for (let i = 0; i < bindings.length; i++) {
+      const pm = bindings[i], n = pm.valueSize, buf = pm.buffer;
+      if (!pm.binding || !buf) continue;
+      pm.binding.getValue(buf, n);                               // accu0 := the property as it is now
+      for (let k = 0; k < n; k++) buf[2 * n + k] = buf[n + k];   // accu1 too: the next blend differs, so it is written
+    }
     return this;
   }
 

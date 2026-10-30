@@ -29,9 +29,10 @@
 // is always derived from the creation pose, so every joint starts at angle 0. limits: [lo, hi] (hinge: radians of the
 // twist angle; slider: metres along the axis; distance: [min, max] length). motor: { velocity, maxForce, target? }
 // (hinge, ball, d6: about the axis; slider: along it; `target` turns the velocity drive into a position servo).
-// compliance (m/N, rad/(N m); 0 = rigid), damping (1/s), breakForce (N) and breakTorque (N m) (default Infinity),
-// distance (default: the creation length), rope (distance: only pulls), swing: max | [lo, hi] (cone angle between the
-// axes, rad), twist: [lo, hi] | max (rad), linear: [x, y, z] each true (locked), false (free) or [lo, hi] (m)
+// compliance (m/N, rad/(N m); 0 = rigid), damping (1/s), breakForce (N) and breakTorque (N m) (default Infinity; the
+// bound of Breaking applies to LOCK rows only: a rope / limit / motor row of a breakable joint still passes its full
+// impulse in the substep it breaks; <= 0 breaks on any force), distance (default: the creation length), rope
+// (distance: only pulls), swing: max | [lo, hi] (cone angle between the axes, rad), twist: [lo, hi] | max (rad), linear: [x, y, z] each true (locked), false (free) or [lo, hi] (m)
 // (d6; default all locked), collideConnected (flag only; the narrowphase filter reads it).
 //
 // Fields (SoA, index = joint id; vectors packed x, y, z at id * 3): count, alive, type, a, b, anchorA, anchorB, axisA,
@@ -96,8 +97,19 @@
 // / lambdaRot keep the totals.
 // lambda is reset at iteration 0 (one call per substep = the paper's single iteration; pass iteration > 0 for extra
 // passes within a substep, which then keep accumulating for the compliance term).
-// Breaking: after its rows, force = |lambdaPos| / h^2 (N), torque = |lambdaRot| / h^2 (N m); a joint whose force
-// exceeds breakForce (or torque breakTorque) gets broken = 1 and is skipped from then on.
+// Breaking: the lock rows of a joint with a finite breakForce / breakTorque are BOUNDED, |lambda| <= breakForce h^2 per
+// linear row (breakTorque h^2 per angular row), through the same clamp-and-re-solve path as motor budgets (clampTree,
+// solveLocal), so in the substep a joint breaks it transmits at most breakForce h per row (sqrt(3) breakForce h on a
+// diagonal) instead of whatever the rigid solve asked for. After its rows, force = |lambdaPos| / h^2 (N), torque =
+// |lambdaRot| / h^2 (N m); a joint whose force exceeds breakForce (torque breakTorque) or one of whose rows was held at
+// its bound gets broken = 1 and is skipped from then on. Why: without the bound a breaking joint first passed its full
+// impulse on, so a struck body shared the hit with everything glued to it (a 30 kg ball at 20 m/s into a 40-piece
+// glued wall broke joints across the whole wall and threw nothing; physics/dynamics/fracture.js). Caveats: a joint
+// below its threshold is untouched (an unbreakable one, breakForce Infinity, bit for bit); a breakable joint yields at
+// breakForce per axis in its breaking substep, and when several rows clamp at once the joint's constraint error is
+// left partly uncorrected for that substep (it is broken afterwards anyway); a pass whose step the trust region cut
+// (applyTree / solveLocal scale sc < 1) can leave a clamped row below its bound, so that substep yields without breaking
+// and the joint breaks in the next one.
 //
 // Velocity pass (paper 3.6), joint by joint. Damping mu: dv = -v_rel min(mu h, 1) as one impulse along v_rel
 // (relative point velocity at anchor A; DISTANCE: its component along d only) and dw = -w_rel min(mu h, 1) along
@@ -453,15 +465,15 @@ const _dl = new Float64Array(12);  // solveLocal pose deltas of a and b
 // Row kinds: a row slot's lambda is accumulated per kind and restarts at 0 when the slot changes kind (a limit's lambda
 // must not count against a motor's budget, nor a motor's against a lock's compliance term).
 const K_LOCK = 1, K_LIMIT = 2, K_MOTOR = 3;
-// _lam[m] = this substep's lambda of row slot m of joint j for `kind`, and the bounds of that kind: locks free,
-// limits one-sided (sign = +1: a lower bound may only push up, lambda >= 0; -1: an upper bound, lambda <= 0),
-// motors +-mmax (passed through _lmax[m] by the caller).
+// _lam[m] = this substep's lambda of row slot m of joint j for `kind`, and the bounds of that kind: limits one-sided
+// (sign = +1: a lower bound may only push up, lambda >= 0; -1: an upper bound, lambda <= 0), locks +-breakForce h^2
+// (linear) / +-breakTorque h^2 (angular) and motors +-mmax, both passed through _lmax[m] by the caller (a lock of an
+// unbreakable joint gets +-Infinity, i.e. free).
 function setLam(J, j, m, kind, sign) {
   const ko = j * 6 + m;
   if (J._rowKind[ko] !== kind) { J._rowKind[ko] = kind; J._rowLam[ko] = 0; }
   _lam[m] = J._rowLam[ko];
   if (kind === K_LIMIT) { _lmin[m] = sign > 0 ? 0 : -Infinity; _lmax[m] = sign > 0 ? Infinity : 0; }
-  else if (kind === K_LOCK) { _lmin[m] = -Infinity; _lmax[m] = Infinity; }
   else { _lmin[m] = -_lmax[m]; }
 }
 
@@ -488,6 +500,9 @@ function dot6(a, ao, b, bo) {
 /** Candidate rows of joint j (see the header) into the scratch above; returns the number of active rows. */
 function buildRows(J, j, B, h) {
   const type = J.type[j], g = _g, s = _s, o = j * 3, at = J.compliance[j] / (h * h);
+  // lock rows of a breakable joint transmit at most its break threshold per row and substep (Infinity: unbounded; a
+  // threshold <= 0 means "break on any force": unbounded rows, so the first pass loads the joint and breaks it)
+  const fmax = J.breakForce[j] > 0 ? J.breakForce[j] * h * h : Infinity, tmax = J.breakTorque[j] > 0 ? J.breakTorque[j] * h * h : Infinity;
   for (let m = 0; m < 6; m++) _act[m] = 0;
   J._motorActive[j] = 0;
   if (type === DISTANCE) {
@@ -501,7 +516,7 @@ function buildRows(J, j, B, h) {
       for (let k = 0; k < 3; k++) {
         g[DV] = k === 0 ? 1 : 0; g[DV + 1] = k === 1 ? 1 : 0; g[DV + 2] = k === 2 ? 1 : 0;
         rowLin(k, DV);
-        _act[k] = 1; _c[k] = k === 0 ? dx : k === 1 ? dy : dz; _al[k] = at; setLam(J, j, k, K_LOCK, 0);
+        _act[k] = 1; _c[k] = k === 0 ? dx : k === 1 ? dy : dz; _al[k] = at; _lmax[k] = fmax; setLam(J, j, k, K_LOCK, 0);
       }
       return 3;
     }
@@ -519,13 +534,13 @@ function buildRows(J, j, B, h) {
       L = 1; // (dx, dy, dz) is now the unit direction; the violation is -t
       g[DV] = dx; g[DV + 1] = dy; g[DV + 2] = dz;
       rowLin(0, DV);
-      _act[0] = 1; _c[0] = -t; _al[0] = at;
+      _act[0] = 1; _c[0] = -t; _al[0] = at; _lmax[0] = fmax;
       setLam(J, j, 0, lo === hi ? K_LOCK : K_LIMIT, 1);
       return 1;
     }
     g[DV] = dx / L; g[DV + 1] = dy / L; g[DV + 2] = dz / L;
     rowLin(0, DV);
-    _act[0] = 1; _c[0] = L - t; _al[0] = at;
+    _act[0] = 1; _c[0] = L - t; _al[0] = at; _lmax[0] = fmax;
     // equality: a lock; a range or rope: one-sided (too long may only pull, too short only push)
     setLam(J, j, 0, lo === hi ? K_LOCK : K_LIMIT, L < lo ? 1 : -1);
     return 1;
@@ -568,7 +583,7 @@ function buildRows(J, j, B, h) {
       if (tg > hi) { tg = hi; motor = 2; } else if (tg < lo) { tg = lo; motor = 2; }
       cv = sk - tg;
     } else continue;
-    _act[k] = 1; _c[k] = cv; _al[k] = al; _lmax[k] = mmax;
+    _act[k] = 1; _c[k] = cv; _al[k] = al; _lmax[k] = kind === K_LOCK ? fmax : mmax;
     setLam(J, j, k, kind, sign);
     if (motor > 0) J._motorActive[j] = motor;
     rowLin(k, e);
@@ -593,7 +608,7 @@ function buildRows(J, j, B, h) {
         if (cv > PI) cv -= TWO_PI; else if (cv <= -PI) cv += TWO_PI;
         if (cv > PI) cv -= TWO_PI; else if (cv <= -PI) cv += TWO_PI;
       }
-      _act[3] = 1; _c[3] = cv; _al[3] = al; _lmax[3] = mmax;
+      _act[3] = 1; _c[3] = cv; _al[3] = al; _lmax[3] = kind === K_LOCK ? tmax : mmax;
       setLam(J, j, 3, kind, sign);
       if (motor > 0) J._motorActive[j] = motor;
       rowAng(3, F0);
@@ -604,8 +619,8 @@ function buildRows(J, j, B, h) {
   if (!needSwing) return n;
   const swing = s[0];
   if (sHi <= 0) {
-    _act[4] = 1; _c[4] = swing; _al[4] = at; setLam(J, j, 4, K_LOCK, 0);
-    _act[5] = 1; _c[5] = 0; _al[5] = at; setLam(J, j, 5, K_LOCK, 0);
+    _act[4] = 1; _c[4] = swing; _al[4] = at; _lmax[4] = tmax; setLam(J, j, 4, K_LOCK, 0);
+    _act[5] = 1; _c[5] = 0; _al[5] = at; _lmax[5] = tmax; setLam(J, j, 5, K_LOCK, 0);
     rowAng(4, F1); rowAng(5, F2);
     n += 2;
   } else if (swing > sHi || swing < sLo) {
@@ -1052,7 +1067,7 @@ export function solveJointsPositions(J, B, h, iteration = 0) {
     }
   }
   ws.only = 0;
-  const ih2 = 1 / (h * h);
+  const h2 = h * h, ih2 = 1 / h2;
   let broke = false;
   for (let j = 0; j < J.count; j++) {
     if (ws.kind[j] === 0) continue;
@@ -1060,9 +1075,19 @@ export function solveJointsPositions(J, B, h, iteration = 0) {
     const f = Math.sqrt(LP[o] * LP[o] + LP[o + 1] * LP[o + 1] + LP[o + 2] * LP[o + 2]) * ih2;
     const t = Math.sqrt(LR[o] * LR[o] + LR[o + 1] * LR[o + 1] + LR[o + 2] * LR[o + 2]) * ih2;
     J.force[j] = f; J.torque[j] = t;
-    if (f > J.breakForce[j] || t > J.breakTorque[j]) { J.broken[j] = 1; broke = true; }
+    let brk = f > J.breakForce[j] || t > J.breakTorque[j];
+    if (!brk && J.breakForce[j] < Infinity) brk = atBound(LP, o, J.breakForce[j] * h2); // a lock row held at its bound
+    if (!brk && J.breakTorque[j] < Infinity) brk = atBound(LR, o, J.breakTorque[j] * h2);
+    if (brk) { J.broken[j] = 1; broke = true; }
   }
   if (broke) J.rebuildConnected(); // a broken joint's bodies collide again
+}
+
+// true when some row lambda of the joint (L[o..o+2]) reached the bound lim > 0 (rounding slack 1e-9 relative)
+function atBound(L, o, lim) {
+  if (!(lim > 0)) return false;
+  const b = lim * (1 - 1e-9);
+  return (L[o] < 0 ? -L[o] : L[o]) >= b || (L[o + 1] < 0 ? -L[o + 1] : L[o + 1]) >= b || (L[o + 2] < 0 ? -L[o + 2] : L[o + 2]) >= b;
 }
 
 const _vp = new Float64Array(4); // velocity row: target, keep factor, impulse min, impulse max

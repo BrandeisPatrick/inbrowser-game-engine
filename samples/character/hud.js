@@ -1,5 +1,6 @@
 // Character HUD, built only from the engine UI kit (teal accent): speed Readout + grounded / animation / camera
-// Badges, fps (engine profiler) and the model in use (top left), a key strip (bottom left), a click-to-play prompt,
+// Badges and a PUSH / RIDE badge (shown only then), fps (engine profiler) and the model in use (top left), a key strip
+// (bottom left), a click-to-play prompt,
 // a first-person crosshair, Flash messages and the HelpOverlay (H, Esc, or the pointer lock released with Esc).
 import { UILayer, Panel, Readout, Badge, Flash, HelpOverlay, setTheme, injectStyle, UIDom } from '@vibe/engine/ui';
 
@@ -21,11 +22,13 @@ const CSS = `
 @media (max-width:760px){.ch-keys{display:none}}
 `;
 
-const KEYS = [['WASD', 'Move'], ['Shift', 'Run'], ['Space', 'Jump'], ['Mouse', 'Look'], ['V', 'Camera'], ['R', 'Respawn'], ['1–8', 'Time'], ['H', 'Help'], ['F3', 'Profiler']];
+const KEYS = [['WASD', 'Move'], ['Shift', 'Run'], ['Space', 'Jump / Mantle'], ['Mouse', 'Look'], ['V', 'Camera'], ['K', 'Ragdoll'], ['R', 'Respawn'], ['1–8', 'Time'], ['H', 'Help'], ['F3', 'Profiler']];
 const HELP_ROWS = [
   ['W A S D / arrows · L-stick', 'Move (camera-relative)'], ['Shift · LB / L3', 'Run'], ['Space · A', 'Jump'],
+  ['Space toward a 0.6–1.4 m ledge', 'Mantle (near the jump apex: no press)'], ['Walk into a crate', 'Push (up to 120 kg)'],
   ['Mouse (click to lock) · R-stick', 'Look'], ['Right-drag', 'Look without the lock'], ['Wheel', 'Zoom (third person, orbit)'],
-  ['V · Y', 'Camera: third → first → orbit'], ['R', 'Respawn'], ['1 – 8', 'Time of day'], ['H · Esc', 'This help'], ['F3', 'Profiler'],
+  ['V · Y', 'Camera: third → first → orbit'], ['K', 'Ragdoll (again: get up)'], ['R', 'Respawn + reset the crates'], ['1 – 8', 'Time of day'],
+  ['H · Esc', 'This help'], ['F3', 'Profiler'],
 ];
 const CAM_LABEL = { third: 'THIRD', first: 'FIRST', orbit: 'ORBIT' };
 
@@ -47,6 +50,8 @@ export class HUD {
     this.ground = new Badge({ parent: row, text: 'GROUNDED' });
     this.anim = new Badge({ parent: row, text: 'IDLE' });
     this.cam = new Badge({ parent: row, text: 'THIRD' });
+    this.act = new Badge({ parent: row, text: '' }); // PUSH / RIDE
+    this.act.setVisible(false);
     this.fps = el('div', 'meta ui-num', sp.el, '— fps');
     this.model = el('div', 'meta', sp.el, '');
     // --- keys (bottom left)
@@ -59,7 +64,8 @@ export class HUD {
     this.help = new HelpOverlay({
       parent: L, title: 'CHARACTER <b>·</b> PLAYGROUND', subtitle: 'Kinematic controller · animation blend tree · camera rigs',
       rows: HELP_ROWS,
-      footnote: 'Walls, 0.3 m stairs, a ramp onto a 2 m platform, 0.5 / 1 / 1.5 m crates and a low-ceiling corridor. '
+      footnote: 'Walls, 0.3 m stairs, a ramp onto a 2 m platform, 0.5 / 1 / 1.5 m crates and a low-ceiling corridor; '
+        + 'pushable crates and a 400 kg one near the start, an elevator platform off the 2 m platform (falls over 9 m/s knock you down). '
         + '?model=&lt;url&gt; loads any rigged glTF, ?model=procedural forces the built-in rig, ?t=noon|golden|night sets the time.',
       hint: 'CLICK TO PLAY · <kbd>H</kbd> TO HIDE',
     });
@@ -84,7 +90,7 @@ export class HUD {
     if (this.onHelp) this.onHelp(this.help.visible);
   }
 
-  /** Per frame. s: { speed (m/s, horizontal), grounded, anim (label), fps } (a reused object). */
+  /** Per frame. s: { speed (m/s, horizontal), grounded, anim (label), action ('PUSH' | 'RIDE' | ''), fps } (reused). */
   update(dt, s) {
     this._fpsT += dt;
     if (!this.speed.tickText(dt)) return;
@@ -94,6 +100,10 @@ export class HUD {
     g.setText('t', g.el, s.grounded ? 'GROUNDED' : 'AIRBORNE');
     g.toggleClass('on', g.el, 'on', !s.grounded);
     this.anim.setText('t', this.anim.el, s.anim);
+    const a = this.act, act = s.action || '';
+    a.setText('t', a.el, act);
+    a.toggleClass('on', a.el, 'on', act !== '');
+    a.setStyle('d', a.el, 'display', act ? '' : 'none');
     if (this._fpsT >= 0.5) { this._fpsT = 0; this.fps.textContent = `${Math.round(s.fps)} fps`; }
   }
 }

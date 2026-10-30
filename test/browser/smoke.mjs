@@ -9,7 +9,8 @@
 // range lit through ClusteredLights (one pose, plus in-page checks: cluster lights in view, no failed program, no
 // black frame), so a GLSL error in the clustered chunks shows up here.
 //
-//   node test/browser/smoke.mjs                        # canyon-run, city, character, sandbox, city-clustered, canyon-night, city-water
+//   node test/browser/smoke.mjs                        # canyon-run, city, character, sandbox, city-clustered, canyon-night, city-water,
+//                                                      # sandbox-cloth / rope / soft / buoyancy / destructible
 //   node test/browser/smoke.mjs city --headed --size=1600x900 [--config=other.vite.config.js]
 import {
   defaultSize, repoRoot, legacyGlobals, readyTimeoutMs, parseArgs, parseSize, startVite, resolvePage, launchChrome,
@@ -22,9 +23,14 @@ const PAGE_QUERY = {
   // 0.8.0: the canyon at night with the clustered lamp field and the GPU dust devils; the city's water refraction (needs a
   // single-sampled scene target: the G-buffer path, with FXAA rather than TAA, whose captures are never hash-stable) at the shore
   'canyon-night': 'lamps=1&gpuparticles=1&t=night', 'city-water': 'notraffic&nostream=1&water=refraction&gbuffer=1&aa=fxaa',
+  // 0.9.0: the sandbox's particle / soft-body / buoyancy / fracture scenes (in-thread; two poses each)
+  'sandbox-cloth': 'scene=cloth', 'sandbox-rope': 'scene=rope', 'sandbox-soft': 'scene=soft', 'sandbox-buoyancy': 'scene=buoyancy', 'sandbox-destructible': 'scene=destructible',
 };
 // pages that are another page with a different query, and the poses they run (default: all)
-const PAGE_PATH = { 'city-clustered': 'city', 'canyon-night': 'canyon-run', 'city-water': 'city' };
+const PAGE_PATH = {
+  'city-clustered': 'city', 'canyon-night': 'canyon-run', 'city-water': 'city',
+  'sandbox-cloth': 'sandbox', 'sandbox-rope': 'sandbox', 'sandbox-soft': 'sandbox', 'sandbox-buoyancy': 'sandbox', 'sandbox-destructible': 'sandbox',
+};
 const PAGE_POSES = { 'city-clustered': ['street'], 'canyon-night': ['night-lamps', 'devils'], 'city-water': ['shore'] };
 // in-page checks after each pose: a failure message or ''
 const PAGE_CHECK = {
@@ -62,7 +68,7 @@ const PAGE_CHECK = {
 const STEP_MS = 90000;
 
 const args = parseArgs();
-const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox', 'city-clustered', 'canyon-night', 'city-water'];
+const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox', 'city-clustered', 'canyon-night', 'city-water', 'sandbox-cloth', 'sandbox-rope', 'sandbox-soft', 'sandbox-buoyancy', 'sandbox-destructible'];
 const size = parseSize(args.size || defaultSize);
 const headless = !args.headed;
 const mac = process.platform === 'darwin';

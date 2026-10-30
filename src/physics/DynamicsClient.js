@@ -53,6 +53,12 @@
 // In-thread mode: calls go straight to the DynamicsWorld (fixed-layout commands through the same applier the worker
 // uses, so argument semantics match); `bodies` / `contacts` / `stats` are the world's own stores, queryColliders is
 // the world's, getPose extrapolates only when asked (`ahead`).
+//
+// Particles (0.9.0, dynamics/particles.js) and particle solvers / plugins are not part of the worker snapshot protocol:
+// a client created with `maxParticles > 0`, with `solvers`, or from a serialized world holding particles or solvers
+// runs in-thread even when a worker was asked for, with one console.warn. In-thread, `particles`, `constraints` and `particleSolvers` are the world's, and
+// addParticleSolver / removeParticleSolver / particleAabb pass through; in worker mode the three fields are null and
+// the three methods throw. `solvers` (option) are registered on the world, or restored by name from `serialized`.
 import { DynamicsWorld } from './dynamics/DynamicsWorld.js';
 import { BODY, FLAG, SHAPE } from './dynamics/state.js';
 import { writeDebugLines } from './dynamics/debug.js';
@@ -69,7 +75,7 @@ const READY_TIMEOUT = 5000;
 const MAX_IN_FLIGHT = 2;
 const TYPE_OF = Object.freeze({ static: BODY.STATIC, kinematic: BODY.KINEMATIC, dynamic: BODY.DYNAMIC });
 /** Options the client reads itself (never part of the world options sent to the worker). */
-const CLIENT_KEYS = ['worker', 'extrapolate', 'maxExtrapolation', 'serialized', 'onError', 'onSnapshot', 'readyTimeout', 'snapshotContacts', 'physics'];
+const CLIENT_KEYS = ['worker', 'extrapolate', 'maxExtrapolation', 'serialized', 'onError', 'onSnapshot', 'readyTimeout', 'snapshotContacts', 'physics', 'solvers'];
 let _warned = false;
 
 /** Whether `worker: true` can be honoured here (a Worker constructor exists). */
@@ -186,6 +192,12 @@ export class DynamicsClient {
    *        returning a Worker-like ({ postMessage(msg, transfer), terminate(), onmessage, onerror }) is used instead
    *        of creating dynamics.worker.js (tests, custom bundling)
    * @param {object} [options.serialized]        start from DynamicsWorld#serialize() output
+   * @param {number} [options.maxParticles=0]    > 0: the world owns particles (dynamics/particles.js); the client then
+   *        runs in-thread whatever `worker` says (particles are not in the worker protocol in 0.9.0)
+   * @param {number} [options.particleDamping=0.01]  1/s, particle velocity damping (DynamicsWorld option)
+   * @param {object[]} [options.solvers]  particle solvers / plugins (DynamicsWorld#addParticleSolver): registered on a
+   *        fresh world, or registered and restored by name from `serialized` (DynamicsWorld.from(s, { solvers })); a
+   *        world without particles takes plugins too (e.g. Buoyancy); like particles, they keep the world in-thread
    * @param {boolean} [options.extrapolate=true]  getPose extrapolates the snapshot to the client's time (worker mode)
    * @param {number} [options.maxExtrapolation=0.1]  s
    * @param {number} [options.snapshotContacts=2048] contacts carried per snapshot
@@ -222,7 +234,13 @@ export class DynamicsClient {
 
     let factory = null;
     const want = o.worker ?? true;
-    if (typeof want === 'function') factory = want;
+    if (o.solvers != null && !Array.isArray(o.solvers)) throw new TypeError('DynamicsClient: `solvers` must be an array of particle solvers / plugins');
+    const particles = (o.maxParticles | 0) > 0 || !!(o.serialized && (o.serialized.particles || (o.serialized.solvers && o.serialized.solvers.length))) ||
+      !!(o.solvers && o.solvers.length);
+    if (particles && (typeof want === 'function' || (want && dynamicsWorkerAvailable()))) {
+      // particles and solver plugins are not in the snapshot protocol (0.9.0): the world runs here
+      console.warn('[DynamicsClient] particles / particle solvers are not carried by the worker protocol in 0.9.0: simulating on the main thread');
+    } else if (typeof want === 'function') factory = want;
     else if (want && dynamicsWorkerAvailable()) {
       // keep this literal form: Vite detects it to bundle the worker and rewrite its URL in builds
       factory = () => new Worker(new URL('./dynamics.worker.js', import.meta.url), { type: 'module' });
@@ -237,8 +255,11 @@ export class DynamicsClient {
 
   // ================================================================ start-up
   _makeWorld() {
-    const s = this.options.serialized;
-    return s ? DynamicsWorld.from(s, { physics: this._physics }) : new DynamicsWorld({ ...this._worldOptions, physics: this._physics });
+    const s = this.options.serialized, solvers = this.options.solvers || [];
+    if (s) return DynamicsWorld.from(s, { physics: this._physics, solvers });
+    const w = new DynamicsWorld({ ...this._worldOptions, physics: this._physics });
+    for (const sv of solvers) w.addParticleSolver(sv);
+    return w;
   }
   _startMain(adoptJoints) {
     const W = this.world = this._makeWorld();
@@ -765,6 +786,22 @@ export class DynamicsClient {
   }
   /** The world's JointStore in-thread; null in worker mode (joints live in the worker). */
   get joints() { return this.world ? this.world.joints : null; }
+  /** The world's ParticleStore in-thread (null without maxParticles); null in worker mode (no particles there). */
+  get particles() { return this.world ? this.world.particles : null; }
+  /** The world's built-in ParticleConstraints in-thread (null without maxParticles); null in worker mode. */
+  get constraints() { return this.world ? this.world.constraints : null; }
+  /** The world's particle solvers in run order in-thread; null in worker mode. */
+  get particleSolvers() { return this.world ? this.world.particleSolvers : null; }
+  /** DynamicsWorld#addParticleSolver (in-thread only: throws in worker mode). */
+  addParticleSolver(solver) { return this._particleWorld('addParticleSolver').addParticleSolver(solver); }
+  /** DynamicsWorld#removeParticleSolver (in-thread only: throws in worker mode). */
+  removeParticleSolver(solver) { return this._particleWorld('removeParticleSolver').removeParticleSolver(solver); }
+  /** DynamicsWorld#particleAabb (in-thread only: throws in worker mode). */
+  particleAabb(group, out6) { return this._particleWorld('particleAabb').particleAabb(group, out6); }
+  _particleWorld(who) {
+    if (!this.world) throw new Error(`DynamicsClient.${who}: particles need the in-thread world; worker mode carries none in 0.9.0 (create the client with maxParticles > 0, or worker: false)`);
+    return this.world;
+  }
   /** Debug line segments (dynamics/debug.js; worker mode: from the snapshot, no joints). Returns the count written. */
   debugLines(out, max, opts, colors) { return this.world ? this.world.debugLines(out, max, opts, colors) : writeDebugLines(this, out, max, opts, colors); }
   /** World stats (worker: as of the latest snapshot). */

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.9.0 — 2026-10-29
+Unified XPBD (phase 5 of the 1.0 roadmap, ENGINE.md "Unified XPBD (0.9.0)"): particles, cloth, ropes, soft bodies,
+particle-rigid coupling, buoyancy, pre-fractured bodies, character dynamics and ragdolls, all on the 0.6.0 solver; a
+world without `maxParticles` steps bit-identically to 0.8.0 (pinned), every sample pose of 0.8.0 hashes the same.
+- Physics: `DynamicsWorld({ maxParticles, particleDamping })` with `world.particles` (ParticleStore), `world.constraints`
+  (distance / bending / attachment / tether), `addParticleSolver` plugins (`{ beginStep, solvePositions, solveVelocities,
+  endStep, serialize, restore }`), `isActive`, `particleAabb`, `recollidePairs(ids, n)` (narrowphase + contact setup
+  for pairs a plugin unglued in its beginStep; beginStep only); plugins also work on worlds without particles;
+  `Cloth.grid`, `Rope.chain`; serialize / from carry particles and plugins; the worker client runs particles in-thread.
+- Physics: `SoftBody.lattice` / `tetrahedralize` / `SoftBody.skin` / `VolumeConstraints` (tet volume + global pressure).
+- Physics: `ParticleCollider` (particles vs bodies / static boxes / heightfield / trimeshes, two-way, friction) and
+  `Buoyancy` (sample-point volumes, drag, `fluid.heightAt`), `closestPointOnShape`.
+- Physics: `fracturePieces`, `FracturedBody` (glue joints with breakForce 15 kN, compliance 5e-7, breakStress,
+  `impactBreak`), `FractureMesh`; the joint solver bounds a breaking joint's rows at breakForce per substep.
+- Physics: `CharacterController.attachDynamics` (push light bodies, ride moving platforms; bit-identical without it).
+- Anim: `Ragdoll.fromSkeleton` / activate / update / deactivate, `AnimationController.resync()`.
+- Samples: sandbox `?scene=cloth|rope|soft|buoyancy|destructible` (+ `render/SoftMeshes.js`), character crates /
+  elevator / ragdoll (K) / mantle with hand IK, poses `push` / `ragdoll`; smoke pages for the five scenes.
+- Tests: `dyn-cloth` (181), `dyn-soft` (112), `dyn-buoyancy` (126), `dyn-fracture` (139), `character-dyn` (97),
+  `ragdoll` (108); `npm test` runs 31 suites.
+- Physics fix: a sphere or capsule rolling on the ground gained spin exponentially (0.6.0 stored contact points as
+  material anchors that rotated with the body); contact anchors of bodies whose top-level shape is a sphere or a
+  capsule are now re-seated on the surface every substep (a compound of spheres keeps the old anchors). Rolling
+  scenes change (the sandbox stack ball), the box-only pins do not.
+- Measured (Node 26, M4, ms per 1/120 s step with 4 substeps): cloth 32x32 0.40, 64x64 1.63; 1000 bodies + 200 rope
+  particles 3.23; three soft cubes 0.89; 200 floating boxes on a wave 1.93; a 40-piece glued wall 3.29 (the joint
+  tree), 3.09 after the hit. Destruction is local (a hole and a few thrown pieces; 90-98 % of a wall stays glued):
+  a full collapse needs CCD, a 1.0+ item.
+
 ## 0.8.0 — 2026-10-29
 Screen-space and volumetric rendering (phase 4 of the 1.0 roadmap, ENGINE.md "Render pipeline (0.8.0)"): reflections,
 volumetric sun light, water refraction, motion blur, depth of field and 3D-LUT grading, composed by `PostFX` in the

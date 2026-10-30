@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-29T21:34:25.438Z",
+  "node": "v26.0.0",
+  "cpu": "Apple M4",
+  "dt": 0.008333333333333333,
+  "warmup": 60,
+  "steps": 240,
+  "rows": [
+    {
+      "scene": "cloth 32x32 + collider",
+      "ms": 0.403,
+      "bodies": 0,
+      "awake": 0,
+      "contacts": 0,
+      "joints": 0,
+      "particles": 1024,
+      "constraints": 8648
+    },
+    {
+      "scene": "cloth 64x64 + collider",
+      "ms": 1.626,
+      "bodies": 0,
+      "awake": 0,
+      "contacts": 0,
+      "joints": 0,
+      "particles": 4096,
+      "constraints": 35720
+    },
+    {
+      "scene": "1000 bodies pit + 200 rope particles",
+      "ms": 3.226,
+      "bodies": 1000,
+      "awake": 999,
+      "contacts": 2415,
+      "joints": 0,
+      "particles": 210,
+      "constraints": 580
+    },
+    {
+      "scene": "soft cubes 6^3 x2 + 8^3 + collider",
+      "ms": 0.889,
+      "bodies": 0,
+      "awake": 0,
+      "contacts": 0,
+      "joints": 0,
+      "particles": 1415,
+      "constraints": 7892
+    },
+    {
+      "scene": "buoyancy 200 boxes on a wave",
+      "ms": 1.931,
+      "bodies": 200,
+      "awake": 200,
+      "contacts": 8,
+      "joints": 0,
+      "particles": 0,
+      "constraints": 0
+    },
+    {
+      "scene": "fractured wall 40 pieces at rest (glued)",
+      "ms": 3.285,
+      "bodies": 40,
+      "awake": 0,
+      "contacts": 0,
+      "joints": 141,
+      "particles": 0,
+      "constraints": 0,
+      "pieces": 40
+    },
+    {
+      "scene": "fractured wall after the hit",
+      "ms": 3.087,
+      "bodies": 41,
+      "awake": 1,
+      "contacts": 1,
+      "joints": 137,
+      "particles": 0,
+      "constraints": 0,
+      "broken": 4
+    }
+  ]
+}

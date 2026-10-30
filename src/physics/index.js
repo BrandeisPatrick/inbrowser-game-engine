@@ -20,3 +20,8 @@ export { Islands } from './dynamics/islands.js';
 export { raycastBodies, shapeCastBodies, overlapBodies, pointInBody, meshBounds } from './dynamics/queries.js';
 export { attachToPhysicsWorld, detachFromPhysicsWorld, syncKinematicFromObject } from './dynamics/bridge.js';
 export { writeDebugLines, DEBUG_LINES } from './dynamics/debug.js';
+// ---- unified XPBD (0.9.0): particles / cloth / rope, soft bodies, particle-rigid coupling + buoyancy, fracture --------
+export { ParticleStore, ParticleConstraints, PFLAG, PCON, Cloth, Rope } from './dynamics/particles.js';
+export { SoftBody, SoftSkin, VolumeConstraints, tetrahedralize } from './dynamics/softbody.js';
+export { ParticleCollider, Buoyancy, closestPointOnShape, sampleShape } from './dynamics/coupling.js';
+export { FracturedBody, fracturePieces, splitConvex, FRACTURE_BREAK_FORCE, FRACTURE_COMPLIANCE } from './dynamics/fracture.js';

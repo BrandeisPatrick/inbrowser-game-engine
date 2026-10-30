@@ -2,12 +2,21 @@
 //
 //   SCENES[name](ctx) -> { info, focus (Vector3) | target (Object3D), view, poses: { overview(cam), close(cam) },
 //                          benchSteps (fixed steps simulated before a bench pose), earlyUpdate?(dt),
-//                          fixedUpdate?(dt) (runs BEFORE dyn.step), update?(dt, alpha), setInputEnabled?(on), status?(),
-//                          dispose() }
-//   ctx = { dyn, physics, scene, pools, params, THREE, rand }   (rand: seeded mulberry32, fresh for every build)
+//                          fixedUpdate?(dt) (runs BEFORE dyn.step), afterStep?(dt) (after dyn.step and the pools'
+//                          capture: the scene's own interpolated meshes), update?(dt, alpha), setInputEnabled?(on),
+//                          status?(), dispose() }
+//   ctx = { dyn, physics, scene, pools, params, THREE, rand, statics, renderer }   (rand: seeded mulberry32, fresh for
+//   every build; statics: what buildStatics returned; renderer: texture anisotropy)
 //   buildStatics(name, { physics, scene, renderer }) adds a scene's PhysicsWorld boxes ONCE per page, before the
-//   DynamicsClient is created (PhysicsWorld boxes cannot be removed, and a worker client copies them at start-up).
+//   DynamicsClient is created (PhysicsWorld boxes cannot be removed, and a worker client copies them at start-up):
+//   bench1000's pit, buoyancy's pool (water.js).
 //   SCENE_HZ[name]: the fixed-step rate a scene wants (default 60; the car's controller is tuned at 120).
+//   SCENE_PARTICLES[name]: the 0.9.0 scenes (cloth, rope, soft, buoyancy, destructible) and their world's particle
+//   capacity (maxParticles; 0 = none). They use the in-thread DynamicsWorld (ctx.dyn.world: particle store and solvers,
+//   buoyancy, fracture glue joints), so main.js never starts the worker for them. Their particle objects (Cloth.grid,
+//   Rope.chain, SoftBody.lattice), particle solvers (ParticleCollider, Buoyancy) and render/SoftMeshes meshes go
+//   through softKit, which captures the meshes after every step, draws them per frame and undoes everything on
+//   dispose(), so a rebuild (R, every bench pose) starts from the same store / solver state as the first build.
 //
 // BodyPools: one InstancedPool per shape type (box, sphere, and one per capsule size: a capsule cannot be scaled
 // from a unit one without squashing its caps), per-body palette colours, sleeping bodies dimmed. track(id, ...)
@@ -23,9 +32,10 @@
 // per-step drivers allocate nothing; scene builds and deliberate spawn events do (the ragdoll scene adds a doll's
 // 11 bodies and 10 joints mid-run, main.js's thrown balls), as does growing a pool's capacity.
 import * as THREE from 'three';
-import { Shapes, JOINT } from '@vibe/engine/physics';
-import { InstancedPool } from '@vibe/engine/render';
+import { Shapes, JOINT, Cloth, Rope, SoftBody, ParticleCollider, Buoyancy, FracturedBody, FRACTURE_BREAK_FORCE } from '@vibe/engine/physics';
+import { InstancedPool, ClothMesh, RopeMesh, SoftBodyMesh, FractureMesh, makeCanvas, finishTexture } from '@vibe/engine/render';
 import { createCar } from './car.js';
+import { createPool } from './water.js';
 
 export const PALETTE = [0xe8b04a, 0xd9643a, 0x4f9fd6, 0x6cbf84, 0xc76bb8, 0xe6dccb, 0x8a96a8, 0xf07f6a];
 const GREY = 0x9a958c, SKIN = 0xe9c9a8;
@@ -272,6 +282,94 @@ function lines(scene, n, color) {
 }
 
 function look(cam, px, py, pz, tx, ty, tz) { cam.position.set(px, py, pz); cam.up.set(0, 1, 0); cam.lookAt(tx, ty, tz); }
+
+/**
+ * The 0.9.0 parts a scene adds to the in-thread world: particle objects (anything with dispose(): Cloth / Rope /
+ * SoftBody), particle solvers (world.addParticleSolver, removed again on dispose) and SoftMeshes (added to the scene,
+ * captured after every step, drawn per frame). dispose() undoes it all, meshes first, then the objects and solvers in
+ * reverse order of creation.
+ */
+function softKit(ctx) {
+  const world = ctx.dyn.world, scene = ctx.scene;
+  if (!world || !world.particles) throw new Error('[sandbox] this scene needs the in-thread dynamics world with particles (SCENE_PARTICLES)');
+  const P = world.particles, C = world.constraints, objects = [], solvers = [], meshes = [];
+  return {
+    world, store: P,
+    add(o) { objects.push(o); return o; },
+    solver(sv) { world.addParticleSolver(sv); solvers.push(sv); return sv; },
+    mesh(m) { scene.add(m.mesh); meshes.push(m); return m; },
+    capture() { for (let i = 0; i < meshes.length; i++) meshes[i].capture(); },
+    draw(alpha) { for (let i = 0; i < meshes.length; i++) meshes[i].update(alpha); },
+    /** HUD line (4 Hz): alive particles and constraints of the whole world. */
+    status() {
+      let n = 0;
+      for (let i = 0, e = P.count; i < e; i++) n += P.alive[i] ? 1 : 0;
+      return `${n} particles · ${C.size} constraints`;
+    },
+    dispose() {
+      for (let i = meshes.length - 1; i >= 0; i--) meshes[i].dispose();
+      for (let i = objects.length - 1; i >= 0; i--) objects[i].dispose();
+      for (let i = solvers.length - 1; i >= 0; i--) world.removeParticleSolver(solvers[i]);
+      meshes.length = 0; objects.length = 0; solvers.length = 0;
+    },
+  };
+}
+/**
+ * A particle rope of rest length `length` hung between the world points a and b (level, |ab| < length): Rope.chain
+ * builds it straight along a -> b (`length` long), its first particle pinned at a and its last pinned at the world
+ * point b (a WORLD_BODY pin); the particles are then moved onto the parabola through a and b whose arc length is `length`, at equal arc
+ * steps (the chords are a hair shorter than the rest length: no stretch, no jolt), close to the hanging rope's rest
+ * shape so it starts nearly still. The tethers (stretch 0) keep rest = the distance along the rope, an upper bound.
+ */
+function slackLine(world, a, b, length, segments, o) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], span = Math.sqrt(dx * dx + dy * dy + dz * dz), f = length / span;
+  const rope = Rope.chain(world, { ...o, from: a, to: [a[0] + dx * f, a[1] + dy * f, a[2] + dz * f], segments, pins: ['from', { end: 'to', body: -1, anchor: b }] });
+  // y(t) = a.y + t dy - 4 sag t (1 - t) along t in [0, 1]; sag by bisection on the sampled arc length
+  const M = 2048, arc = new Float64Array(M + 1);
+  const curve = (sag) => {
+    let px = a[0], py = a[1], pz = a[2];
+    for (let i = 1; i <= M; i++) {
+      const t = i / M, x = a[0] + dx * t, y = a[1] + dy * t - 4 * sag * t * (1 - t), z = a[2] + dz * t;
+      arc[i] = arc[i - 1] + Math.sqrt((x - px) * (x - px) + (y - py) * (y - py) + (z - pz) * (z - pz));
+      px = x; py = y; pz = z;
+    }
+    return arc[M];
+  };
+  let lo = 0, hi = length;
+  for (let it = 0; it < 60; it++) { const mid = (lo + hi) / 2; if (curve(mid) < length) lo = mid; else hi = mid; }
+  const sag = (lo + hi) / 2, total = curve(sag), P = world.particles;
+  for (let k = 1, i = 1; k <= segments; k++) {
+    const want = (total * k) / segments;
+    while (i < M && arc[i] < want) i++;
+    const t = (i - 1 + (want - arc[i - 1]) / (arc[i] - arc[i - 1])) / M;
+    const p = rope.ids[k] * 3;
+    P.pos[p] = P.prevPos[p] = a[0] + dx * t;
+    P.pos[p + 1] = P.prevPos[p + 1] = a[1] + dy * t - 4 * sag * t * (1 - t);
+    P.pos[p + 2] = P.prevPos[p + 2] = a[2] + dz * t;
+  }
+  return rope;
+}
+/** n x n checker of two CSS colours with a light seam line (cloth), a fresh CanvasTexture (the scene disposes it). */
+function checkerTexture(renderer, a, b, n = 8) {
+  const S = 256, cell = S / n, c = makeCanvas(S), g = c.getContext('2d');
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { g.fillStyle = (x + y) & 1 ? a : b; g.fillRect(x * cell, y * cell, cell, cell); }
+  g.fillStyle = 'rgba(255,255,255,0.55)';
+  g.fillRect(0, 0, S, 3); g.fillRect(0, S - 3, S, 3); g.fillRect(0, 0, 3, S); g.fillRect(S - 3, 0, 3, S);
+  return finishTexture(new THREE.CanvasTexture(c), renderer, true, false);
+}
+/** Brick courses (1 m texture: 4 courses of 0.5 m bricks, half-brick offset) in greys the piece colours tint. */
+function brickTexture(renderer) {
+  const S = 256, c = makeCanvas(S), g = c.getContext('2d'), H = S / 4, W = S / 2;
+  g.fillStyle = '#8c8680'; g.fillRect(0, 0, S, S); // mortar
+  for (let r = 0; r < 4; r++) {
+    for (let k = -1; k < 3; k++) {
+      const x = k * W + (r & 1 ? W / 2 : 0);
+      g.fillStyle = (r + k) & 1 ? '#f2f0ec' : '#e2ded8';
+      g.fillRect(x + 3, r * H + 3, W - 6, H - 6);
+    }
+  }
+  return finishTexture(new THREE.CanvasTexture(c), renderer);
+}
 /** Uniform random unit quaternion (rejection sampling in the unit 4-ball: + - * / sqrt only). */
 function randomQuat(rand) {
   for (;;) {
@@ -287,8 +385,10 @@ function randomYaw(rand) {
 const qArr = (q) => [q.x, q.y, q.z, q.w];
 
 // ------------------------------------------------------------------ static world (once per page)
-/** PhysicsWorld boxes + their meshes for scene `name` (bench1000: the 20 m pit). Call before creating the client. */
-export function buildStatics(name, { physics, scene }) {
+/** PhysicsWorld boxes + their meshes for scene `name` (bench1000: the 20 m pit; buoyancy: the pool). Call before
+ *  creating the client. */
+export function buildStatics(name, { physics, scene, renderer }) {
+  if (name === 'buoyancy') return createPool({ physics, scene, renderer, center: [0, 0], size: 12, level: 0.8 });
   if (name !== 'bench1000') return null;
   const IN = 10, T = 0.5, H = 2.5;
   const walls = [
@@ -309,7 +409,9 @@ export function buildStatics(name, { physics, scene }) {
 }
 
 /** Fixed-step rate per scene (Hz); 60 when not listed. */
-export const SCENE_HZ = { car: 120 };
+export const SCENE_HZ = { car: 120, destructible: 120 }; // the fracture glue is tuned at h = 1/480 (120 Hz x 4)
+/** The 0.9.0 scenes: their world's particle capacity (DynamicsWorld maxParticles, 0 = none); in-thread only (header). */
+export const SCENE_PARTICLES = { cloth: 1720, rope: 128, soft: 1024, buoyancy: 64, destructible: 0 }; // constraints: 8 x this (cloth 13 688)
 
 // ------------------------------------------------------------------ scenes
 export const SCENES = {
@@ -533,6 +635,224 @@ export const SCENES = {
       focus: new THREE.Vector3(0, 1, 0), view: { distance: 30, elevation: 0.62, azimuth: 0.35 },
       poses: { overview: (cam) => look(cam, 0, 24, 25, 0, 0, 0), close: (cam) => look(cam, 7.5, 3.6, 9.5, 2, 0.6, 1.5) },
       dispose: () => B.dispose(),
+    };
+  },
+
+  // ---------------------------------------------------------------- 0.9.0: particles, soft bodies, buoyancy, fracture
+  // (in-thread world: SCENE_PARTICLES; the particle objects and their meshes go through softKit)
+
+  /** 40 x 40 cloth pinned at two corners, draped over a box and a ball. */
+  cloth(ctx) {
+    const B = builder(ctx), K = softKit(ctx), world = K.world;
+    B.box(0.5, 0.5, 0.5, [-0.25, 0.5, -0.1], { type: 'static', color: PALETTE[2] }); // 1 m box
+    B.sphere(0.3, [0.72, 0.3, 0.05], { type: 'static', color: PALETTE[1] });          // 0.6 m ball beside it
+    K.solver(new ParticleCollider(world, { friction: 0.5, margin: 0.005 }));
+    // laid flat at 1.7 m (grid +Y -> world -Z: the grid's top row is the far edge, behind the box), its far corners
+    // pinned; it falls onto the box and the ball and hangs down their sides
+    const cloth = K.add(Cloth.grid(world, {
+      nx: 40, ny: 40, spacing: 0.05, position: [0, 1.7, 0], quaternion: [-S2, 0, 0, S2], mass: 1.2,
+      stretch: 0, shear: 1e-6, bend: 2e-3, radius: 0.022, pins: ['top-left', 'top-right'],
+    }));
+    const tex = checkerTexture(ctx.renderer, '#d9643a', '#e6dccb');
+    const mat = new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.82, metalness: 0 });
+    K.mesh(new ClothMesh(K.store, cloth, mat));
+    return {
+      info: 'A 40 x 40 particle cloth (1.95 m, 1.2 kg: XPBD stretch / shear / bend constraints + tethers) pinned at two corners, falling onto a 1 m box and a 0.6 m ball (two-way particle collider).',
+      benchSteps: 240, // 4 s: draped over the box and the ball (still swaying by a few cm/s)
+      focus: new THREE.Vector3(0, 0.8, 0), view: { distance: 6, elevation: 0.32, azimuth: 0.55 },
+      poses: { overview: (cam) => look(cam, 3.4, 2.9, 4.2, 0, 0.8, 0), close: (cam) => look(cam, 1.9, 1.35, 1.9, 0.3, 0.65, 0.05) },
+      afterStep: () => K.capture(),
+      update: (dt, alpha) => K.draw(alpha),
+      status: () => K.status(),
+      dispose() { K.dispose(); mat.dispose(); tex.dispose(); B.dispose(); },
+    };
+  },
+
+  /** A pendulum rope with a 5 kg ball, a rope bridge between two posts catching two crates, a rope on a turning wheel. */
+  rope(ctx) {
+    const B = builder(ctx), K = softKit(ctx), world = K.world;
+    K.solver(new ParticleCollider(world, { friction: 0.6, margin: 0.005 }));
+    const mat = new THREE.MeshStandardMaterial({ color: 0xcdb487, roughness: 0.9, metalness: 0 });
+    const tube = (r) => K.mesh(new RopeMesh(K.store, r, { radius: 0.035, radialSegments: 7, material: mat }));
+    // 1. pendulum (x = -4.5): pinned under a gantry at 4 m (beam and post behind the swing plane z = 0), laid out
+    //    horizontally, a 5 kg ball tied to its end
+    const PA = [-4.5, 4, 0], BR = 0.15;
+    B.box(0.06, 0.05, 0.33, [PA[0], PA[1] + 0.1, -0.27], { type: 'static', color: GREY });
+    B.box(0.06, (PA[1] + 0.15) / 2, 0.06, [PA[0], (PA[1] + 0.15) / 2, -0.6], { type: 'static', color: GREY });
+    const ball = B.sphere(BR, [PA[0] + 2 + BR + 0.04, PA[1], 0], { mass: 5, color: PALETTE[1] });
+    // the ball is a body pin of the 'to' end: the builder tethers every particle to the pinned 'from' end and adds a
+    // body tether from the pin to the ball, so the 5 kg ball cannot drag the 0.8 kg rope longer (Gauss-Seidel would
+    // ping-pong the light last particle between the ball and its tether)
+    const r1 = K.add(Rope.chain(world, {
+      from: PA, to: [PA[0] + 2, PA[1], 0], segments: 20, mass: 0.8, radius: 0.04, stretch: 0, bend: 0.5,
+      pins: ball >= 0 ? ['from', { end: 'to', body: ball, anchor: [-(BR + 0.04), 0, 0] }] : ['from'],
+    }));
+    tube(r1);
+    // 2. a rope bridge (x = -1.5 .. 1.5): two slack lines of 4 kg (3.2 m over the 3 m between two posts) tied together
+    //    by rungs (distance constraints every 3rd particle: on one line, or two loose ones, a box rolls off or slips
+    //    through), two 2 kg crates dropped onto it from 0.3 / 0.6 m (a 4 m/s landing bounces them off: the lines
+    //    are only 0.13 kg per particle)
+    const LY = 1.6, LX = 1.5, LZ = 0.13, LN = 30;
+    for (const s of [-1, 1]) B.box(0.08, 0.85, LZ + 0.08, [s * (LX + 0.08), 0.85, 0], { type: 'static', color: GREY });
+    const lines2 = [-LZ, LZ].map((z) => K.add(slackLine(world, [-LX, LY, z], [LX, LY, z], 3.2, LN, { mass: 4, radius: 0.04, stretch: 0, bend: 0.2 })));
+    for (const l of lines2) tube(l);
+    const C = world.constraints, X = K.store.pos, rungIds = [], rungs = [];
+    for (let k = 3; k < LN; k += 3) {
+      const a = lines2[0].ids[k], b = lines2[1].ids[k];
+      rungs.push(C.addDistance(a, b, Math.abs(X[b * 3 + 2] - X[a * 3 + 2]), 0));
+      rungIds.push(a, b);
+    }
+    K.add({ dispose: () => { for (const c of rungs) C.remove(c); } });
+    K.mesh(new RopeMesh(K.store, { ids: Int32Array.from(rungIds), count: rungIds.length, length: rungs.length * 2 * LZ }, { radius: 0.025, radialSegments: 6, material: mat, pairs: true, joints: false }));
+    for (let k = 0; k < 2; k++) B.box(0.2, 0.15, 0.24, [(k - 0.5) * 0.7, 1.6 + k * 0.3, (ctx.rand() - 0.5) * 0.04], { q: randomYaw(ctx.rand), mass: 2, friction: 0.7, color: PALETTE[(k + 2) % PALETTE.length] });
+    // 3. a rope on a motorised wheel (x = 4.5): tied to the end of one arm, hanging free
+    const WX = 4.5, WY = 3.2, ARM = 0.85;
+    const wheel = B.compound([{ kind: 'box', dims: [ARM, 0.07, 0.14] }, { kind: 'box', dims: [0.07, ARM, 0.14] }], [WX, WY, 0], { density: 400, color: PALETTE[2] });
+    B.joint({ type: JOINT.HINGE, bodyA: wheel, bodyB: -1, anchorA: [0, 0, 0], anchorB: [WX, WY, 0], axisA: [0, 0, 1], axisB: [0, 0, 1], motor: { velocity: 0.8, maxForce: 4000 } });
+    B.box(0.05, WY / 2, 0.05, [WX, WY / 2, -0.26], { type: 'static', layer: DECOR, color: GREY }); // axle post
+    const r3 = K.add(Rope.chain(world, {
+      from: [WX + ARM, WY, 0.2], to: [WX + ARM, WY - 1.6, 0.2], segments: 16, mass: 0.3, radius: 0.04, stretch: 0, bend: 0.5,
+      pins: [{ end: 'from', body: wheel, anchor: [ARM, 0, 0.2] }],
+    }));
+    tube(r3);
+    return {
+      info: 'Particle ropes (XPBD distance + bending + tethers, two-way particle collider): a pendulum with a 5 kg ball tied to its end, a rope bridge (two slack lines and rungs) catching two crates, a rope tied to a motorised wheel.',
+      benchSteps: 180, // 3 s: the pendulum swinging back, the crates resting on the bridge, the wheel turned 2.4 rad
+      focus: new THREE.Vector3(0, 2, 0), view: { distance: 13, elevation: 0.18, azimuth: 0 },
+      poses: { overview: (cam) => look(cam, 0, 4.2, 12.5, 0, 2, 0), close: (cam) => look(cam, 1.4, 2.4, 3.6, 0, 1.4, 0) },
+      afterStep: () => K.capture(),
+      update: (dt, alpha) => K.draw(alpha),
+      status: () => K.status(),
+      dispose() { K.dispose(); mat.dispose(); B.dispose(); },
+    };
+  },
+
+  /** Two soft cubes and a soft ball dropped onto the ground and a wedge; a rigid box lands on one cube. */
+  soft(ctx) {
+    const B = builder(ctx), K = softKit(ctx), world = K.world;
+    // wedge: two static slabs tilted +-30 deg about Z leaning on each other, ridge at ~0.8 m along Z at x = 1.6
+    const WX = 1.6, S15 = 0.25881904510252074, C15 = 0.9659258262890683; // sin / cos 15 deg (half of 30)
+    for (const s of [-1, 1]) B.box(0.75, 0.08, 0.7, [WX - s * 0.6, 0.36, 0], { type: 'static', q: [0, 0, s * S15, C15], color: GREY });
+    const jelly = (o) => K.add(SoftBody.lattice(world, { shape: 'box', size: [0.8, 0.8, 0.8], resolution: 6, mass: 30, edge: 2e-4, volume: 0, ...o }));
+    const c1 = jelly({ position: [-1.7, 0.75, 0] });                              // onto the ground
+    const c2 = jelly({ position: [0.85, 1.55, 0.05], quaternion: [0, 0, S15, C15] }); // flat onto the wedge's left slope
+    const sp = K.add(SoftBody.lattice(world, { shape: 'sphere', radius: 0.5, resolution: 6, position: [WX + 0.12, 2.2, 0.1], mass: 15, edge: 1e-4, volume: 0, pressure: 1e-7 }));
+    // the collider after the lattices (their tet-volume solver registers with the first one): the contacts run last in
+    // every sweep, so the volume pass cannot push resting particles back into the floor or the slope
+    K.solver(new ParticleCollider(world, { friction: 0.6, margin: 0.005 }));
+    const m1 = new THREE.MeshStandardMaterial({ color: PALETTE[3], roughness: 0.35, metalness: 0 });
+    const m2 = new THREE.MeshStandardMaterial({ color: PALETTE[4], roughness: 0.35, metalness: 0 });
+    const m3 = new THREE.MeshStandardMaterial({ color: PALETTE[0], roughness: 0.3, metalness: 0 });
+    K.mesh(new SoftBodyMesh(K.store, c1, m1));
+    K.mesh(new SoftBodyMesh(K.store, c2, m2));
+    const pr = K.store.radius[sp.ids[0]];
+    const ballGeo = new THREE.SphereGeometry(0.5 + pr, 32, 18);
+    K.mesh(new SoftBodyMesh(K.store, sp, m3, { geometry: ballGeo }));
+    // a 0.6 x 0.24 x 0.6 m rigid box (35 kg) dropped onto the first cube (a smaller, heavier box sinks into the
+    // particles under it, tilts and slides off); a curb stops the ball rolling away off the ridge
+    B.box(0.3, 0.12, 0.3, [-1.7, 1.5, 0.02], { q: randomYaw(ctx.rand), density: 400, friction: 0.6, color: PALETTE[6] });
+    B.box(0.12, 0.2, 1.4, [3.9, 0.2, 0], { type: 'static', color: GREY });
+    return {
+      info: 'Tetrahedral soft bodies (XPBD edge + tet-volume constraints, two-way particle collider): two 30 kg 0.8 m cubes (6 x 6 x 6 cells), one sliding down a wedge, and a 1 m ball (voxel lattice + pressure, a skinned round mesh) rolling off its ridge; a 35 kg rigid box lands on the left cube.',
+      benchSteps: 200, // 3.3 s: the box resting on the dented cube, the second cube off the slope, the ball at the curb
+      focus: new THREE.Vector3(0, 0.6, 0), view: { distance: 7.5, elevation: 0.3, azimuth: 0.4 },
+      poses: { overview: (cam) => look(cam, 3.2, 3.4, 6.4, 0, 0.5, -0.3), close: (cam) => look(cam, -0.4, 1.3, 2.4, -1.6, 0.5, 0) },
+      afterStep: () => K.capture(),
+      update: (dt, alpha) => K.draw(alpha),
+      status: () => K.status(),
+      dispose() { K.dispose(); m1.dispose(); m2.dispose(); m3.dispose(); ballGeo.dispose(); B.dispose(); },
+    };
+  },
+
+  /** Floating, neutral and sinking bodies and a rope in the pool (buildStatics: water.js) on the world's Gerstner swell. */
+  buoyancy(ctx) {
+    const B = builder(ctx), K = softKit(ctx), world = K.world, rand = ctx.rand, pool = ctx.statics;
+    if (!pool || !pool.fluid) throw new Error('[sandbox] buoyancy: no pool (buildStatics)');
+    const [cx, cz] = pool.center;
+    B.box(0.3, 0.3, 0.3, [cx - 3, 1.7, cz - 2], { q: randomYaw(rand), density: 500, color: PALETTE[0] });      // floats half out
+    B.box(0.25, 0.25, 0.25, [cx - 0.8, 1.8, cz + 2.2], { q: randomYaw(rand), density: 950, color: PALETTE[3] }); // barely floats
+    B.sphere(0.25, [cx + 1.6, 1.9, cz - 2.6], { density: 2000, color: PALETTE[6] });                            // sinks
+    B.box(1, 0.1, 0.2, [cx + 2.4, 1.3, cz + 1.4], { q: randomYaw(rand), density: 400, color: PALETTE[1] });     // plank
+    K.solver(new ParticleCollider(world, { friction: 0.4, margin: 0.005 }));
+    const rope = K.add(Rope.chain(world, { from: [cx - 4.2, 1.2, cz + 3.6], to: [cx - 1.4, 1.2, cz + 4.4], segments: 20, mass: 1.5, radius: 0.05, stretch: 0, bend: 0.3, pins: [] }));
+    const mat = new THREE.MeshStandardMaterial({ color: 0xe8b04a, roughness: 0.8, metalness: 0 });
+    K.mesh(new RopeMesh(K.store, rope, { radius: 0.05, radialSegments: 7, material: mat }));
+    // every dynamic body (thrown balls too) and every free particle floats; heightAt is the pool's (NO_FLUID outside)
+    // the pool clock has one writer (fixedUpdate: setTime before every step), so no advance of Buoyancy's own
+    const buoy = K.solver(new Buoyancy(world, { fluid: { ...pool.fluid, drag: 1.2, angularDrag: 0.6, time: 0 }, bodies: true, particles: true, samples: 4, advanceTime: false }));
+    let n = 0, h = 0; // pool clock: t = n * h (fixed steps since the build, the fixed dt)
+    return {
+      info: 'Buoyancy on the world Water swell (the pool surface and the physics share waveHeight): a 500 kg/m³ crate floats, a 950 kg/m³ one barely, a 2000 kg/m³ ball sinks, a plank rides the waves, a 20-segment rope floats. (The swell uses Math.sin / hypot: bit-identical within one JS engine, not across browsers.)',
+      benchSteps: 300, // 5 s: bodies floating at their depths, the ball on the floor
+      focus: new THREE.Vector3(cx, 0.8, cz), view: { distance: 15, elevation: 0.42, azimuth: 0.6 },
+      poses: { overview: (cam) => look(cam, cx + 8.5, 6.5, cz + 10, cx, 0.6, cz), close: (cam) => look(cam, cx + 4.6, 1.9, cz + 5.2, cx + 1.4, 0.8, cz + 1.2) },
+      fixedUpdate(dt) { // step k (1-based) runs from (k - 1) h to k h and floats the bodies on the waves at (k - 1) h
+        h = dt; pool.time = n * dt; n++;
+        buoy.setTime(pool.time);
+      },
+      afterStep: () => K.capture(),
+      // the surface is drawn at the render time of the interpolated bodies, (k - 1 + alpha) h after k steps: one step
+      // (h) ahead of the heights that step k sampled (beginStep at (k - 1) h); invisible at 60 Hz, noted, not hidden
+      update(dt, alpha) {
+        pool.setTime(n > 0 ? (n - 1 + alpha) * h : 0);
+        K.draw(alpha);
+      },
+      status: () => `${K.status()} · t ${pool.time.toFixed(1)} s`,
+      dispose() { K.dispose(); mat.dispose(); B.dispose(); pool.time = 0; pool.setTime(0); },
+    };
+  },
+
+  /** A 40-piece pre-fractured wall glued by breakable fixed joints; a 30 kg ball hits it 1.8 s in (Space throws more). */
+  destructible(ctx) {
+    const B = builder(ctx), world = ctx.dyn.world, rand = ctx.rand;
+    if (!world) throw new Error('[sandbox] destructible: needs the in-thread world (SCENE_PARTICLES)');
+    // 120 Hz (SCENE_HZ): the glue (FracturedBody defaults: FRACTURE_BREAK_FORCE, FRACTURE_COMPLIANCE) is tuned at
+    // h = 1/480; at 60 Hz the same impulse reads as half the force. fb.impactPlugin (a world plugin) frees the struck
+    // piece and the glue within IMPACT.radius of any contact closing faster than IMPACT.speed BEFORE the contact solve,
+    // and re-collides the freed pieces in that same step, so a hit (the scene's ball, main.js's thrown ones) opens a
+    // hole instead of being spread through the glued wall. The scene's shot carries a thrown ball's momentum (30 kg at
+    // BALL_SPEED ~ 600 N s) as 60 kg at 10 m/s: no CCD, so a ball first touches up to one step's travel deep, and at
+    // 10 m/s that is 8 cm per 120 Hz step instead of 17-18 cm; it is launched at step FIRE (1.6 s) and aimed so that its
+    // front is 5 mm from the wall face after FLY steps (no damping: the travel is exact). The pieces are cut finer around
+    // the point it hits (fracturePieces `impact`, wall frame, 8 cm inside the front face).
+    // The cut pattern decides whether this hit throws pieces (headless at benchSteps: 0-2 pieces moved > 0.3 m on the
+    // patterns of page seeds 1-8 and of fracture seeds 41-104, 3 on fracture seed 35): the wall uses fracture seed
+    // FSEED = 35, chosen for that (?fseed=N for another pattern), not the page seed.
+    const FIRE = 192, FLY = 36, BALL = 0.25, MASS = 60, SPEED = 10, HIT = [0.15, 1.05], IMPACT = { speed: 3, radius: 0.6 };
+    const FSEED = (+ctx.params.get('fseed') | 0) || 35;
+    const fb = new FracturedBody(world, {
+      shape: Shapes.box(2, 1, 0.25), position: [0, 1, 0], pieces: 40, seed: FSEED, density: 600, friction: 0.6,
+      impact: [HIT[0], HIT[1] - 1, 0.17],
+    });
+    const plugin = world.addParticleSolver(fb.impactPlugin(IMPACT));
+    // one brick texture tinted per piece (a few close stone colours), cut faces in a plain interior material
+    const bricks = brickTexture(ctx.renderer);
+    const mats = [0xc9b9a6, 0xb9a48d, 0xd8cab6, 0xa99582].map((c) => new THREE.MeshStandardMaterial({ map: bricks, color: c, roughness: 0.85, metalness: 0 }));
+    const inner = new THREE.MeshStandardMaterial({ color: 0x8f8a83, roughness: 0.95, metalness: 0 });
+    const fm = new FractureMesh(fb, world, mats[0], { interpolate: true, interiorMaterial: inner });
+    const pairs = mats.map((m) => [m, inner]);
+    for (let i = 0; i < fm.meshes.length; i++) fm.meshes[i].material = pairs[Math.floor(rand() * pairs.length)];
+    ctx.scene.add(fm.group);
+    let n = 0;
+    return {
+      info: `A 4 x 2 x 0.5 m wall (600 kg/m³) cut into ${fb.ids.length} convex pieces (fracture seed ${FSEED}${FSEED === 35 ? ', picked because this hit throws pieces' : ''}; ?fseed=N) glued by ${fb.joints.length} breakable fixed joints (${FRACTURE_BREAK_FORCE / 1000} kN, compliant) at 120 Hz; a hit closing faster than ${IMPACT.speed} m/s frees the struck piece and the glue within ${IMPACT.radius} m before the contact solve; a 60 kg ball hits at 10 m/s 1.9 s in. Space throws more.`,
+      benchSteps: 320, // 2.67 s at 120 Hz: 0.77 s after the hit (step 228), three pieces out and still moving
+      fb, // the FracturedBody (window.__sandbox.scene.fb)
+      focus: new THREE.Vector3(0, 1, 0), view: { distance: 10, elevation: 0.22, azimuth: 0.5 },
+      poses: { overview: (cam) => look(cam, 5.5, 3.2, 8, 0, 1, 0), close: (cam) => look(cam, 1.6, 1.5, 3.4, 0, 0.9, -0.3) },
+      fixedUpdate(dt) {
+        if (n++ !== FIRE) return;
+        const t = FLY * dt; // aimed so that gravity brings it down onto HIT
+        const id = B.sphere(BALL, [HIT[0], HIT[1] + 4.905 * t * t, 0.25 + BALL + 0.005 + SPEED * t], { mass: MASS, friction: 0.5, restitution: 0.2, linearDamping: 0, color: 0xf2f2f2 });
+        if (id >= 0) ctx.dyn.setVelocity(id, 0, 0, -SPEED, 0, 0, 0);
+      },
+      afterStep() { fb.update(); fm.capture(); },
+      update: (dt, alpha) => fm.update(alpha),
+      status: () => `${fb.ids.length} pieces · ${fb.brokenCount} / ${fb.joints.length} glue joints broken`,
+      dispose() {
+        world.removeParticleSolver(plugin); // first: a rebuild registers a fresh one (reset determinism)
+        fm.dispose(); for (const m of mats) m.dispose(); inner.dispose(); bricks.dispose(); fb.dispose(); B.dispose();
+      },
     };
   },
 };
