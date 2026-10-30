@@ -23,6 +23,8 @@ export { makeVegAtlas, vegUV, VEG_ATLAS_SIZE, VEG_REGIONS } from './VegTextures.
 export { createVegMaterial, createImpostorMaterial as createVegImpostorMaterial } from './VegMaterials.js';
 export {
   Water, WAVES, NWAVES, waveHeight, waveSlope, waveUniforms, WAVE_GLSL, makeWaterNormalMap, makeNoiseTexture, shoreSegments, buildShoreField, createWaterMaterial,
+  // refraction (0.8.0): the scene behind the surface from a render/SceneCopy (MapWorld({ water: { refraction } }))
+  setWaterSceneTextures, setWaterRefraction, updateWaterRefraction, waterRefractionOn, WATER_REFRACTION_DEFAULTS, WATER_REFRACTION_UNIFORMS,
 } from './Water.js';
 export { Waterfront, createGroundMaterial, bakeLandClass, buildFarLand, shoreTextures } from './Shore.js';
 export { Boats, ferryGeometry, shipGeometry, sailboatGeometry, fishingBoatGeometry, launchGeometry, createBoatMaterial } from './Boats.js';

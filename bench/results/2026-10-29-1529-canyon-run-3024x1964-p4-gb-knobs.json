@@ -1,0 +1,1329 @@
+{
+  "page": "canyon-run",
+  "label": "p4-gb-knobs",
+  "date": "2026-10-29T19:29:12.544Z",
+  "url": "http://localhost:5190/canyon-run/?bench=1&size=3024x1964&gbuffer=1&lut=warm",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 60904,
+  "reloads": 0,
+  "poses": [
+    "straight",
+    "chase",
+    "aerial",
+    "ahead"
+  ],
+  "settings": [
+    {
+      "label": "gbuffer+taa (ref)",
+      "set": {
+        "postfx.lut": null
+      }
+    },
+    {
+      "label": "ssr",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true
+      }
+    },
+    {
+      "label": "ssr scale 0.25",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true,
+        "postfx.ssr.scale": 0.25
+      }
+    },
+    {
+      "label": "ssr steps 16",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true,
+        "postfx.ssr.steps": 16
+      }
+    },
+    {
+      "label": "ssr steps 32 refine 6",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true,
+        "postfx.ssr.steps": 32,
+        "postfx.ssr.refine": 6
+      }
+    },
+    {
+      "label": "ssr maxRoughness 0.7",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true,
+        "postfx.ssr.maxRoughness": 0.7
+      }
+    },
+    {
+      "label": "volumetric",
+      "set": {
+        "postfx.lut": null,
+        "postfx.volumetric": true
+      }
+    },
+    {
+      "label": "volumetric scale 0.5",
+      "set": {
+        "postfx.lut": null,
+        "postfx.volumetric": true,
+        "postfx.volumetric.scale": 0.5
+      }
+    },
+    {
+      "label": "volumetric steps 32",
+      "set": {
+        "postfx.lut": null,
+        "postfx.volumetric": true,
+        "postfx.volumetric.steps": 32
+      }
+    },
+    {
+      "label": "volumetric steps 8",
+      "set": {
+        "postfx.lut": null,
+        "postfx.volumetric": true,
+        "postfx.volumetric.steps": 8
+      }
+    },
+    {
+      "label": "motionBlur 1",
+      "set": {
+        "postfx.lut": null,
+        "postfx.motionBlur": 1
+      }
+    },
+    {
+      "label": "motionBlur samples 16",
+      "set": {
+        "postfx.lut": null,
+        "postfx.motionBlur": 1,
+        "postfx.motionBlur.samples": 16
+      }
+    },
+    {
+      "label": "dof",
+      "set": {
+        "postfx.lut": null,
+        "postfx.dof": true
+      }
+    },
+    {
+      "label": "dof scale 1",
+      "set": {
+        "postfx.lut": null,
+        "postfx.dof": true,
+        "postfx.dof.scale": 1
+      }
+    },
+    {
+      "label": "dof samples 16",
+      "set": {
+        "postfx.lut": null,
+        "postfx.dof": true,
+        "postfx.dof.samples": 16
+      }
+    },
+    {
+      "label": "dof nearBlur off",
+      "set": {
+        "postfx.lut": null,
+        "postfx.dof": true,
+        "postfx.dof.nearBlur": false
+      }
+    },
+    {
+      "label": "lut warm",
+      "set": {
+        "postfx.lut": {
+          "texture": {
+            "metadata": {
+              "version": 4.7,
+              "type": "Texture",
+              "generator": "Texture.toJSON"
+            },
+            "uuid": "1182c243-0409-4bf1-95c3-66c23a5aa355",
+            "name": "",
+            "image": "6e6e42f8-94e5-4473-a2c2-9d33ce576ccd",
+            "mapping": 300,
+            "channel": 0,
+            "repeat": [
+              1,
+              1
+            ],
+            "offset": [
+              0,
+              0
+            ],
+            "center": [
+              0,
+              0
+            ],
+            "rotation": 0,
+            "wrap": [
+              1001,
+              1001
+            ],
+            "format": 1023,
+            "internalFormat": null,
+            "type": 1016,
+            "colorSpace": "",
+            "minFilter": 1006,
+            "magFilter": 1006,
+            "anisotropy": 1,
+            "flipY": false,
+            "generateMipmaps": false,
+            "premultiplyAlpha": false,
+            "unpackAlignment": 1
+          },
+          "size": 16,
+          "strength": 1
+        }
+      }
+    },
+    {
+      "label": "ao.normals gbuffer",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ao.normals": "gbuffer"
+      }
+    },
+    {
+      "label": "all on",
+      "set": {
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.motionBlur": 1,
+        "postfx.dof": true,
+        "postfx.ao.normals": "gbuffer",
+        "postfx.lut": {
+          "texture": {
+            "metadata": {
+              "version": 4.7,
+              "type": "Texture",
+              "generator": "Texture.toJSON"
+            },
+            "uuid": "1182c243-0409-4bf1-95c3-66c23a5aa355",
+            "name": "",
+            "image": "6e6e42f8-94e5-4473-a2c2-9d33ce576ccd",
+            "mapping": 300,
+            "channel": 0,
+            "repeat": [
+              1,
+              1
+            ],
+            "offset": [
+              0,
+              0
+            ],
+            "center": [
+              0,
+              0
+            ],
+            "rotation": 0,
+            "wrap": [
+              1001,
+              1001
+            ],
+            "format": 1023,
+            "internalFormat": null,
+            "type": 1016,
+            "colorSpace": "",
+            "minFilter": 1006,
+            "magFilter": 1006,
+            "anisotropy": 1,
+            "flipY": false,
+            "generateMipmaps": false,
+            "premultiplyAlpha": false,
+            "unpackAlignment": 1
+          },
+          "size": 16,
+          "strength": 1
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "straight",
+      "ms": 10.596,
+      "fps": 94.38,
+      "hash": "f9b037cc",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 54,
+      "triangles": 554437
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "chase",
+      "ms": 11.083,
+      "fps": 90.23,
+      "hash": "a6308732",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 58,
+      "triangles": 685509
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "aerial",
+      "ms": 11.346,
+      "fps": 88.14,
+      "hash": "95d02cd9",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 55,
+      "triangles": 744047
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "ahead",
+      "ms": 7.804,
+      "fps": 128.14,
+      "hash": "162b3380",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 45,
+      "triangles": 593271
+    },
+    {
+      "setting": "ssr",
+      "pose": "straight",
+      "ms": 11.146,
+      "fps": 89.72,
+      "hash": "4a3b565a",
+      "meanAbs": 0.0006,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.007,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "ssr",
+      "pose": "chase",
+      "ms": 11.596,
+      "fps": 86.24,
+      "hash": "3487396b",
+      "meanAbs": 0.0071,
+      "p99": 0,
+      "max": 10.854,
+      "pctOver2": 0.103,
+      "pctOver8": 0.027,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "ssr",
+      "pose": "aerial",
+      "ms": 11.887,
+      "fps": 84.12,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "ssr",
+      "pose": "ahead",
+      "ms": 8.296,
+      "fps": 120.54,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "ssr scale 0.25",
+      "pose": "straight",
+      "ms": 11.067,
+      "fps": 90.36,
+      "hash": "8c847ed7",
+      "meanAbs": 0.0005,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "ssr scale 0.25",
+      "pose": "chase",
+      "ms": 11.496,
+      "fps": 86.99,
+      "hash": "9f50762f",
+      "meanAbs": 0.0067,
+      "p99": 0,
+      "max": 10.729,
+      "pctOver2": 0.093,
+      "pctOver8": 0.023,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "ssr scale 0.25",
+      "pose": "aerial",
+      "ms": 11.792,
+      "fps": 84.81,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "ssr scale 0.25",
+      "pose": "ahead",
+      "ms": 8.208,
+      "fps": 121.83,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "ssr steps 16",
+      "pose": "straight",
+      "ms": 11.167,
+      "fps": 89.55,
+      "hash": "585becc5",
+      "meanAbs": 0.0006,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.007,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "ssr steps 16",
+      "pose": "chase",
+      "ms": 11.571,
+      "fps": 86.42,
+      "hash": "9cddba9f",
+      "meanAbs": 0.0075,
+      "p99": 0,
+      "max": 11.458,
+      "pctOver2": 0.112,
+      "pctOver8": 0.03,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "ssr steps 16",
+      "pose": "aerial",
+      "ms": 11.892,
+      "fps": 84.09,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "ssr steps 16",
+      "pose": "ahead",
+      "ms": 8.308,
+      "fps": 120.36,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "ssr steps 32 refine 6",
+      "pose": "straight",
+      "ms": 11.179,
+      "fps": 89.45,
+      "hash": "c3b5eb4f",
+      "meanAbs": 0.0006,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "ssr steps 32 refine 6",
+      "pose": "chase",
+      "ms": 11.608,
+      "fps": 86.15,
+      "hash": "69a9a6e4",
+      "meanAbs": 0.0073,
+      "p99": 0,
+      "max": 10.417,
+      "pctOver2": 0.108,
+      "pctOver8": 0.027,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "ssr steps 32 refine 6",
+      "pose": "aerial",
+      "ms": 11.892,
+      "fps": 84.09,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "ssr steps 32 refine 6",
+      "pose": "ahead",
+      "ms": 8.313,
+      "fps": 120.3,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "ssr maxRoughness 0.7",
+      "pose": "straight",
+      "ms": 11.146,
+      "fps": 89.72,
+      "hash": "d48b35c4",
+      "meanAbs": 0.0299,
+      "p99": 0,
+      "max": 112.646,
+      "pctOver2": 0.102,
+      "pctOver8": 0.065,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "ssr maxRoughness 0.7",
+      "pose": "chase",
+      "ms": 11.612,
+      "fps": 86.11,
+      "hash": "d7c85d5d",
+      "meanAbs": 1.2363,
+      "p99": 56.333,
+      "max": 141.979,
+      "pctOver2": 2.445,
+      "pctOver8": 1.983,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "ssr maxRoughness 0.7",
+      "pose": "aerial",
+      "ms": 11.883,
+      "fps": 84.15,
+      "hash": "34a6ad3d",
+      "meanAbs": 0.002,
+      "p99": 0,
+      "max": 31.375,
+      "pctOver2": 0.019,
+      "pctOver8": 0.011,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "ssr maxRoughness 0.7",
+      "pose": "ahead",
+      "ms": 8.325,
+      "fps": 120.12,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "volumetric",
+      "pose": "straight",
+      "ms": 11.179,
+      "fps": 89.45,
+      "hash": "4b288360",
+      "meanAbs": 0.1628,
+      "p99": 0.854,
+      "max": 18.375,
+      "pctOver2": 0.005,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "volumetric",
+      "pose": "chase",
+      "ms": 11.525,
+      "fps": 86.77,
+      "hash": "3e7b15e5",
+      "meanAbs": 0.0129,
+      "p99": 0.167,
+      "max": 0.396,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "volumetric",
+      "pose": "aerial",
+      "ms": 11.967,
+      "fps": 83.57,
+      "hash": "fe85df4c",
+      "meanAbs": 0.0352,
+      "p99": 0.208,
+      "max": 1.188,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "volumetric",
+      "pose": "ahead",
+      "ms": 8.558,
+      "fps": 116.85,
+      "hash": "ab94a179",
+      "meanAbs": 0.151,
+      "p99": 0.625,
+      "max": 1.125,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "volumetric scale 0.5",
+      "pose": "straight",
+      "ms": 12.05,
+      "fps": 82.99,
+      "hash": "9f61c909",
+      "meanAbs": 0.1628,
+      "p99": 0.854,
+      "max": 18.375,
+      "pctOver2": 0.005,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "volumetric scale 0.5",
+      "pose": "chase",
+      "ms": 12.142,
+      "fps": 82.36,
+      "hash": "a9fbe846",
+      "meanAbs": 0.0129,
+      "p99": 0.167,
+      "max": 0.396,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "volumetric scale 0.5",
+      "pose": "aerial",
+      "ms": 12.875,
+      "fps": 77.67,
+      "hash": "5ad59b43",
+      "meanAbs": 0.0352,
+      "p99": 0.208,
+      "max": 1.188,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "volumetric scale 0.5",
+      "pose": "ahead",
+      "ms": 9.708,
+      "fps": 103,
+      "hash": "7a4433f9",
+      "meanAbs": 0.1512,
+      "p99": 0.625,
+      "max": 1.125,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "volumetric steps 32",
+      "pose": "straight",
+      "ms": 11.438,
+      "fps": 87.43,
+      "hash": "15bf8264",
+      "meanAbs": 0.1628,
+      "p99": 0.854,
+      "max": 18.375,
+      "pctOver2": 0.005,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "volumetric steps 32",
+      "pose": "chase",
+      "ms": 11.688,
+      "fps": 85.56,
+      "hash": "53a986c4",
+      "meanAbs": 0.0129,
+      "p99": 0.167,
+      "max": 0.396,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "volumetric steps 32",
+      "pose": "aerial",
+      "ms": 12.221,
+      "fps": 81.83,
+      "hash": "a0cd6248",
+      "meanAbs": 0.0352,
+      "p99": 0.208,
+      "max": 1.188,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "volumetric steps 32",
+      "pose": "ahead",
+      "ms": 8.929,
+      "fps": 111.99,
+      "hash": "6e117cb1",
+      "meanAbs": 0.151,
+      "p99": 0.625,
+      "max": 1.125,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "volumetric steps 8",
+      "pose": "straight",
+      "ms": 11.046,
+      "fps": 90.53,
+      "hash": "0bcafc07",
+      "meanAbs": 0.1628,
+      "p99": 0.854,
+      "max": 18.375,
+      "pctOver2": 0.005,
+      "pctOver8": 0.001,
+      "drawCalls": 55,
+      "triangles": 563326
+    },
+    {
+      "setting": "volumetric steps 8",
+      "pose": "chase",
+      "ms": 11.438,
+      "fps": 87.43,
+      "hash": "76f345a8",
+      "meanAbs": 0.0129,
+      "p99": 0.167,
+      "max": 0.396,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 59,
+      "triangles": 694398
+    },
+    {
+      "setting": "volumetric steps 8",
+      "pose": "aerial",
+      "ms": 11.821,
+      "fps": 84.6,
+      "hash": "fd7500fe",
+      "meanAbs": 0.0352,
+      "p99": 0.208,
+      "max": 1.188,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 56,
+      "triangles": 744048
+    },
+    {
+      "setting": "volumetric steps 8",
+      "pose": "ahead",
+      "ms": 8.35,
+      "fps": 119.76,
+      "hash": "78073803",
+      "meanAbs": 0.151,
+      "p99": 0.625,
+      "max": 1.125,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 46,
+      "triangles": 593272
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "straight",
+      "ms": 12.675,
+      "fps": 78.9,
+      "hash": "16a44e4d",
+      "meanAbs": 0.0005,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001,
+      "drawCalls": 59,
+      "triangles": 563330
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "chase",
+      "ms": 13.175,
+      "fps": 75.9,
+      "hash": "a6308732",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 63,
+      "triangles": 694402
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "aerial",
+      "ms": 13.467,
+      "fps": 74.26,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 60,
+      "triangles": 744052
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "ahead",
+      "ms": 9.779,
+      "fps": 102.26,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 50,
+      "triangles": 593276
+    },
+    {
+      "setting": "motionBlur samples 16",
+      "pose": "straight",
+      "ms": 12.725,
+      "fps": 78.59,
+      "hash": "16a44e4d",
+      "meanAbs": 0.0005,
+      "p99": 0,
+      "max": 19.25,
+      "pctOver2": 0.006,
+      "pctOver8": 0.001,
+      "drawCalls": 59,
+      "triangles": 563330
+    },
+    {
+      "setting": "motionBlur samples 16",
+      "pose": "chase",
+      "ms": 13.183,
+      "fps": 75.85,
+      "hash": "a6308732",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 63,
+      "triangles": 694402
+    },
+    {
+      "setting": "motionBlur samples 16",
+      "pose": "aerial",
+      "ms": 13.467,
+      "fps": 74.26,
+      "hash": "95d02cd9",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 60,
+      "triangles": 744052
+    },
+    {
+      "setting": "motionBlur samples 16",
+      "pose": "ahead",
+      "ms": 9.783,
+      "fps": 102.21,
+      "hash": "162b3380",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 50,
+      "triangles": 593276
+    },
+    {
+      "setting": "dof",
+      "pose": "straight",
+      "ms": 13.287,
+      "fps": 75.26,
+      "hash": "8453dd47",
+      "meanAbs": 1.6774,
+      "p99": 45.042,
+      "max": 161.938,
+      "pctOver2": 8.786,
+      "pctOver8": 4.331,
+      "drawCalls": 60,
+      "triangles": 563331
+    },
+    {
+      "setting": "dof",
+      "pose": "chase",
+      "ms": 13.729,
+      "fps": 72.84,
+      "hash": "00fff1ee",
+      "meanAbs": 0.7019,
+      "p99": 16.5,
+      "max": 108.75,
+      "pctOver2": 4.521,
+      "pctOver8": 1.865,
+      "drawCalls": 64,
+      "triangles": 694403
+    },
+    {
+      "setting": "dof",
+      "pose": "aerial",
+      "ms": 13.987,
+      "fps": 71.49,
+      "hash": "1cce5aa9",
+      "meanAbs": 1.165,
+      "p99": 16.146,
+      "max": 132.813,
+      "pctOver2": 10.181,
+      "pctOver8": 2.006,
+      "drawCalls": 61,
+      "triangles": 744053
+    },
+    {
+      "setting": "dof",
+      "pose": "ahead",
+      "ms": 10.4,
+      "fps": 96.15,
+      "hash": "b0236c72",
+      "meanAbs": 1.0204,
+      "p99": 15.188,
+      "max": 152.396,
+      "pctOver2": 7.058,
+      "pctOver8": 1.897,
+      "drawCalls": 51,
+      "triangles": 593277
+    },
+    {
+      "setting": "dof scale 1",
+      "pose": "straight",
+      "ms": 16.85,
+      "fps": 59.35,
+      "hash": "cd7371a5",
+      "meanAbs": 1.5597,
+      "p99": 42.208,
+      "max": 155.354,
+      "pctOver2": 8.378,
+      "pctOver8": 4.102,
+      "drawCalls": 60,
+      "triangles": 563331
+    },
+    {
+      "setting": "dof scale 1",
+      "pose": "chase",
+      "ms": 17.4,
+      "fps": 57.47,
+      "hash": "163ab986",
+      "meanAbs": 0.5767,
+      "p99": 12.063,
+      "max": 107.521,
+      "pctOver2": 3.94,
+      "pctOver8": 1.509,
+      "drawCalls": 64,
+      "triangles": 694403
+    },
+    {
+      "setting": "dof scale 1",
+      "pose": "aerial",
+      "ms": 17.542,
+      "fps": 57.01,
+      "hash": "a3b8544e",
+      "meanAbs": 1.1328,
+      "p99": 15.5,
+      "max": 131.938,
+      "pctOver2": 9.899,
+      "pctOver8": 1.954,
+      "drawCalls": 61,
+      "triangles": 744053
+    },
+    {
+      "setting": "dof scale 1",
+      "pose": "ahead",
+      "ms": 13.963,
+      "fps": 71.62,
+      "hash": "0ba5a950",
+      "meanAbs": 0.9687,
+      "p99": 14.604,
+      "max": 150.333,
+      "pctOver2": 6.759,
+      "pctOver8": 1.789,
+      "drawCalls": 51,
+      "triangles": 593277
+    },
+    {
+      "setting": "dof samples 16",
+      "pose": "straight",
+      "ms": 13.158,
+      "fps": 76,
+      "hash": "1796ea79",
+      "meanAbs": 1.6522,
+      "p99": 44,
+      "max": 156.75,
+      "pctOver2": 8.768,
+      "pctOver8": 4.302,
+      "drawCalls": 60,
+      "triangles": 563331
+    },
+    {
+      "setting": "dof samples 16",
+      "pose": "chase",
+      "ms": 13.558,
+      "fps": 73.76,
+      "hash": "4806fd77",
+      "meanAbs": 0.6906,
+      "p99": 16.125,
+      "max": 104.667,
+      "pctOver2": 4.545,
+      "pctOver8": 1.813,
+      "drawCalls": 64,
+      "triangles": 694403
+    },
+    {
+      "setting": "dof samples 16",
+      "pose": "aerial",
+      "ms": 13.846,
+      "fps": 72.22,
+      "hash": "3694db93",
+      "meanAbs": 1.16,
+      "p99": 15.771,
+      "max": 133.167,
+      "pctOver2": 10.274,
+      "pctOver8": 2.002,
+      "drawCalls": 61,
+      "triangles": 744053
+    },
+    {
+      "setting": "dof samples 16",
+      "pose": "ahead",
+      "ms": 10.267,
+      "fps": 97.4,
+      "hash": "c1c50da4",
+      "meanAbs": 1.0067,
+      "p99": 15.188,
+      "max": 152.583,
+      "pctOver2": 7.016,
+      "pctOver8": 1.87,
+      "drawCalls": 51,
+      "triangles": 593277
+    },
+    {
+      "setting": "dof nearBlur off",
+      "pose": "straight",
+      "ms": 12.667,
+      "fps": 78.95,
+      "hash": "dd42331d",
+      "meanAbs": 1.6349,
+      "p99": 45.042,
+      "max": 161.938,
+      "pctOver2": 8.52,
+      "pctOver8": 4.207,
+      "drawCalls": 57,
+      "triangles": 563328
+    },
+    {
+      "setting": "dof nearBlur off",
+      "pose": "chase",
+      "ms": 13.083,
+      "fps": 76.43,
+      "hash": "a7e1a5b4",
+      "meanAbs": 0.6951,
+      "p99": 16.5,
+      "max": 108.75,
+      "pctOver2": 4.522,
+      "pctOver8": 1.866,
+      "drawCalls": 61,
+      "triangles": 694400
+    },
+    {
+      "setting": "dof nearBlur off",
+      "pose": "aerial",
+      "ms": 13.492,
+      "fps": 74.12,
+      "hash": "1cce5aa9",
+      "meanAbs": 1.165,
+      "p99": 16.146,
+      "max": 132.813,
+      "pctOver2": 10.181,
+      "pctOver8": 2.006,
+      "drawCalls": 58,
+      "triangles": 744050
+    },
+    {
+      "setting": "dof nearBlur off",
+      "pose": "ahead",
+      "ms": 9.938,
+      "fps": 100.63,
+      "hash": "b0236c72",
+      "meanAbs": 1.0204,
+      "p99": 15.188,
+      "max": 152.396,
+      "pctOver2": 7.058,
+      "pctOver8": 1.897,
+      "drawCalls": 48,
+      "triangles": 593274
+    },
+    {
+      "setting": "lut warm",
+      "pose": "straight",
+      "ms": 10.633,
+      "fps": 94.04,
+      "hash": "aeec8477",
+      "meanAbs": 8.091,
+      "p99": 9.292,
+      "max": 15.021,
+      "pctOver2": 99.817,
+      "pctOver8": 68.634,
+      "drawCalls": 54,
+      "triangles": 563325
+    },
+    {
+      "setting": "lut warm",
+      "pose": "chase",
+      "ms": 11.054,
+      "fps": 90.46,
+      "hash": "34438bd7",
+      "meanAbs": 7.613,
+      "p99": 9.292,
+      "max": 9.646,
+      "pctOver2": 99.856,
+      "pctOver8": 49.175,
+      "drawCalls": 58,
+      "triangles": 694397
+    },
+    {
+      "setting": "lut warm",
+      "pose": "aerial",
+      "ms": 11.388,
+      "fps": 87.82,
+      "hash": "bb21fe21",
+      "meanAbs": 7.6472,
+      "p99": 9.479,
+      "max": 9.75,
+      "pctOver2": 99.986,
+      "pctOver8": 47.594,
+      "drawCalls": 55,
+      "triangles": 744047
+    },
+    {
+      "setting": "lut warm",
+      "pose": "ahead",
+      "ms": 7.846,
+      "fps": 127.46,
+      "hash": "d651e220",
+      "meanAbs": 8.7038,
+      "p99": 9.688,
+      "max": 9.875,
+      "pctOver2": 99.83,
+      "pctOver8": 79.41,
+      "drawCalls": 45,
+      "triangles": 593271
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "straight",
+      "ms": 10.688,
+      "fps": 93.57,
+      "hash": "02fe8d91",
+      "meanAbs": 0.0202,
+      "p99": 0.042,
+      "max": 36.208,
+      "pctOver2": 0.256,
+      "pctOver8": 0.07,
+      "drawCalls": 54,
+      "triangles": 563325
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "chase",
+      "ms": 11.15,
+      "fps": 89.69,
+      "hash": "e78ab019",
+      "meanAbs": 0.0223,
+      "p99": 0.063,
+      "max": 42.583,
+      "pctOver2": 0.221,
+      "pctOver8": 0.082,
+      "drawCalls": 58,
+      "triangles": 694397
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "aerial",
+      "ms": 11.433,
+      "fps": 87.46,
+      "hash": "2e55da58",
+      "meanAbs": 0.0007,
+      "p99": 0,
+      "max": 3.146,
+      "pctOver2": 0.002,
+      "pctOver8": 0,
+      "drawCalls": 55,
+      "triangles": 744047
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "ahead",
+      "ms": 7.883,
+      "fps": 126.85,
+      "hash": "1a1024d8",
+      "meanAbs": 0.0095,
+      "p99": 0,
+      "max": 38.313,
+      "pctOver2": 0.108,
+      "pctOver8": 0.038,
+      "drawCalls": 45,
+      "triangles": 593271
+    },
+    {
+      "setting": "all on",
+      "pose": "straight",
+      "ms": 16.592,
+      "fps": 60.27,
+      "hash": "bf7c95c1",
+      "meanAbs": 9.417,
+      "p99": 48.75,
+      "max": 167.167,
+      "pctOver2": 99.946,
+      "pctOver8": 73.244,
+      "drawCalls": 67,
+      "triangles": 563338
+    },
+    {
+      "setting": "all on",
+      "pose": "chase",
+      "ms": 17.004,
+      "fps": 58.81,
+      "hash": "56e3eefb",
+      "meanAbs": 8.0516,
+      "p99": 19.417,
+      "max": 113.792,
+      "pctOver2": 99.922,
+      "pctOver8": 50.725,
+      "drawCalls": 71,
+      "triangles": 694410
+    },
+    {
+      "setting": "all on",
+      "pose": "aerial",
+      "ms": 17.404,
+      "fps": 57.46,
+      "hash": "e4eb9de8",
+      "meanAbs": 8.1982,
+      "p99": 20.563,
+      "max": 137.583,
+      "pctOver2": 100,
+      "pctOver8": 48.725,
+      "drawCalls": 68,
+      "triangles": 744060
+    },
+    {
+      "setting": "all on",
+      "pose": "ahead",
+      "ms": 13.858,
+      "fps": 72.16,
+      "hash": "275c73d2",
+      "meanAbs": 9.3768,
+      "p99": 20.021,
+      "max": 157.167,
+      "pctOver2": 99.995,
+      "pctOver8": 83.42,
+      "drawCalls": 58,
+      "triangles": 593284
+    }
+  ]
+}

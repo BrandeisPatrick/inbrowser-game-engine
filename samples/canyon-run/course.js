@@ -6,8 +6,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { InstancedPool, makeCanvas, finishTexture, theme } from '@vibe/engine';
 import { TRACK_HALF_WIDTH, GATE_HALF_WIDTH } from './track.js';
+import { KIND_THIN } from './props.js';
 
-const KIND_THIN = 3;
 const col = new THREE.Color();
 function box(w, h, d, x, y, z, hex) {
   const g = new THREE.BoxGeometry(w, h, d).toNonIndexed();

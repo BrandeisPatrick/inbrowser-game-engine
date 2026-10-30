@@ -31,6 +31,11 @@ const SUITES = [
   { file: 'shadows.mjs' },
   { file: 'postfx-options.mjs' },
   { file: 'gbuffer-chunks.mjs' },
+  // render (0.8.0): screen-space reflections + AO normals, volumetrics, motion blur / DoF / LUT, water refraction
+  { file: 'ssr-ao.mjs' },
+  { file: 'volumetric.mjs' },
+  { file: 'blur-dof-lut.mjs' },
+  { file: 'water.mjs', shim: true },
 ];
 let failed = 0, ran = 0;
 const t0 = performance.now();

@@ -8,9 +8,23 @@
 // budget keeps the pass at one cost whatever the device pixel ratio. `upsample` ('linear' | 'depth') is how the final
 // pass samples aoTexture: below half resolution a bilinear tap leaves wider halos at silhouettes, the depth-aware
 // upsample does not. setResolution(scale, maxPixels) resizes at once; `compact` (see the setter) halves the traffic.
+// Normals (`normals`, live): 'depth' (default) reconstructs them from depth (three's computeNormalFromDepth, 9 depth
+// taps) with the shader text and defines exactly as before the option existed. 'gbuffer' reads the scene pass's own
+// view-space normal (normal maps included) from `gbuffer.normal` (octahedral rg, nearest, full resolution, sampled at
+// the AO pixel's uv) wherever a lit material wrote one (flags bit1 hasNormal) and falls back to the depth
+// reconstruction per pixel elsewhere. It is a second program: the same GTAO text with getViewNormal patched under the
+// define AO_GBUFFER_NORMAL (NORMAL_VECTOR_TYPE stays 0), switched with one material.needsUpdate when the state
+// changes. `gbuffer` (default null) is set by PostFX while its G-buffer exists; 'gbuffer' without one renders with
+// depth normals and warns once. The output contract (r = ao, g = linear depth) is the same in both modes.
+// Caveat ('gbuffer'): these are shading normals, which can face away from the view direction on normal-mapped pixels
+// seen at grazing angles; GTAO's horizon maths can then take a negative projected normal (its ny), possibly darkening
+// fringes on water or bumped rock. To be looked at in the browser before anyone makes 'gbuffer' a default.
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GTAOShader, generateMagicSquareNoise } from 'three/addons/shaders/GTAOShader.js';
+import { GBUFFER_GLSL_DECODE } from '../GBuffer.js';
+
+export const AO_NORMALS = ['depth', 'gbuffer'];
 
 const FAR_DEPTH = 60000; // g-channel value for sky / cleared texels
 
@@ -50,7 +64,7 @@ export class AOPass extends Pass {
   /**
    * @param {THREE.PerspectiveCamera} camera
    * @param {object} [o] radius (m), thickness (m), samples, resolutionScale, maxPixels, upsample ('linear' | 'depth'),
-   *   compact, fadeNear/fadeFar (m)
+   *   compact, fadeNear/fadeFar (m), normals ('depth' | 'gbuffer')
    */
   constructor(camera, o = {}) {
     super();
@@ -75,6 +89,12 @@ export class AOPass extends Pass {
     // early out beyond the fade distance (most of an aerial view): no normal reconstruction, no horizon search
     frag = frag.replace('vec3 viewNormal = getViewNormal(vUv);', 'if ( -viewPos.z > AO_FADE_FAR ) { gl_FragColor = vec4( 1.0, -viewPos.z, 0.0, 1.0 ); return; }\n\t\t\tvec3 viewNormal = getViewNormal(vUv);');
     if (!frag.includes('AO_FADE_FAR ) {')) console.warn('[render] GTAO early-out patch point missing');
+    this._fragDepth = frag; // normals 'depth': the text above, unchanged
+    this._fragGBuffer = gbufferNormalFrag(frag); // normals 'gbuffer' (null: patch point missing, warned)
+    this._normals = checkNormals(o.normals ?? 'depth');
+    this._gbuffer = null;
+    this._gbOn = false; // AO_GBUFFER_NORMAL defined, the 'gbuffer' text bound
+    this._warnedNoGBuffer = false;
     this.material = new THREE.ShaderMaterial({
       name: 'PostFXGTAO',
       defines: {
@@ -103,6 +123,8 @@ export class AOPass extends Pass {
     u.distanceExponent.value = o.distanceExponent ?? 1.6;
     u.distanceFallOff.value = 1.0;
     u.scale.value = o.power ?? 1.0;
+    // numbers from the start (three's template holds null): render() compares them with the camera's, number to number
+    u.cameraNear.value = camera.near; u.cameraFar.value = camera.far;
 
     this.blur = new THREE.ShaderMaterial({
       name: 'PostFXAOBlur',
@@ -113,9 +135,21 @@ export class AOPass extends Pass {
     });
     this._quad = new FullScreenQuad(null);
     this._clear = new THREE.Color();
+    this._syncNormals();
   }
 
   get aoTexture() { return this.rtA.texture; }
+
+  /** GTAO normals: 'depth' (reconstructed from depth, default) | 'gbuffer' (gbuffer.normal; needs `gbuffer`). */
+  get normals() { return this._normals; }
+  set normals(v) { this._normals = checkNormals(v); this._syncNormals(); }
+
+  /**
+   * The G-buffer whose normal attachment normals 'gbuffer' reads (PostFX sets it while its G-buffer exists).
+   * @type {import('../GBuffer.js').GBuffer|null}
+   */
+  get gbuffer() { return this._gbuffer; }
+  set gbuffer(gb) { this._gbuffer = gb ?? null; this._syncNormals(); }
 
   setSize(width, height) {
     this._size.set(width, height);
@@ -153,8 +187,15 @@ export class AOPass extends Pass {
     const depth = readBuffer.depthTexture;
     if (!depth) return;
     const cam = this.camera, u = this.material.uniforms;
+    if (this._gbOn) u.tNormal.value = this._gbuffer.normal;
+    else if (this._normals === 'gbuffer' && this._gbuffer === null && !this._warnedNoGBuffer) {
+      this._warnedNoGBuffer = true;
+      console.warn("[AOPass] normals 'gbuffer' without a G-buffer (aoPass.gbuffer is null): normals reconstructed from depth");
+    }
     u.tDepth.value = depth;
-    u.cameraNear.value = cam.near; u.cameraFar.value = cam.far;
+    // near / far only on change: a double written into a { value } uniform boxes a new heap number every frame
+    if (u.cameraNear.value !== cam.near) u.cameraNear.value = cam.near;
+    if (u.cameraFar.value !== cam.far) u.cameraFar.value = cam.far;
     u.cameraProjectionMatrix.value.copy(cam.projectionMatrix);
     u.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
     u.cameraWorldMatrix.value.copy(cam.matrixWorld);
@@ -185,5 +226,39 @@ export class AOPass extends Pass {
     this.rtA.dispose(); this.rtB.dispose(); this.material.dispose(); this.blur.dispose(); this._quad.dispose();
     this.material.uniforms.tNoise.value.dispose();
   }
+
+  // 'gbuffer' normals on when requested, a G-buffer is set and the patch applied; the text and define change (and the
+  // program with them) only when that state changes
+  _syncNormals() {
+    const on = this._normals === 'gbuffer' && this._gbuffer !== null && this._fragGBuffer !== null;
+    if (on === this._gbOn) return;
+    this._gbOn = on;
+    const m = this.material;
+    m.fragmentShader = on ? this._fragGBuffer : this._fragDepth;
+    if (on) m.defines.AO_GBUFFER_NORMAL = 1; else { delete m.defines.AO_GBUFFER_NORMAL; m.uniforms.tNormal.value = null; }
+    m.needsUpdate = true;
+  }
 }
 const _skyClear = new THREE.Color(1, FAR_DEPTH, 0);
+
+/** @param {*} v @returns {'depth' | 'gbuffer'} */
+function checkNormals(v) {
+  if (!AO_NORMALS.includes(v)) throw new Error(`[AOPass] normals: unknown value '${v}' ('depth' | 'gbuffer')`);
+  return v;
+}
+
+// The GTAO text with getViewNormal reading the G-buffer under AO_GBUFFER_NORMAL: the decode helpers before it, then
+// `#ifdef AO_GBUFFER_NORMAL` (G-buffer normal where hasNormal, depth reconstruction elsewhere) `#elif` the stock
+// NORMAL_VECTOR_TYPE chain (0 here: depth). Null (warned) when three's text no longer has the anchors.
+function gbufferNormalFrag(frag) {
+  const head = 'vec3 getViewNormal(const vec2 uv) {', stock = '#if NORMAL_VECTOR_TYPE == 2';
+  const i = frag.indexOf(head), j = i < 0 ? -1 : frag.indexOf(stock, i);
+  if (j < 0) { console.warn("[render] GTAO getViewNormal patch point missing: AO normals 'gbuffer' unavailable"); return null; }
+  return frag.slice(0, i) + GBUFFER_GLSL_DECODE + '\n\t\t' + frag.slice(i, j) + /* glsl */`#ifdef AO_GBUFFER_NORMAL
+				// the scene pass's view-space normal (normal maps included): the nearest full-resolution texel under
+				// this AO pixel, where a lit material wrote one; reconstructed from depth elsewhere
+				vec4 gbN = textureLod(tNormal, uv, 0.);
+				if ((engineGbFlags(gbN.a) & ENGINE_GB_HAS_NORMAL) != 0) return engineOctDecode(gbN.rg);
+				return computeNormalFromDepth(uv);
+			#elif NORMAL_VECTOR_TYPE == 2` + frag.slice(j + stock.length);
+}

@@ -7,7 +7,8 @@
 // PointerLock + Atmosphere (keys 1-8) + PostFX (?nofx=1 to disable) + the UI kit HUD. The player is an Entity with
 // three components: Motor (controller, fixed step + interpolation), Animator (state machine), Facing (turn + rig state).
 // Query: ?model=<url> (any rigged glTF; relative to this page) | ?model=procedural, ?t=<preset|hours>, ?nofx=1,
-// ?fps=60, ?profile=N, ?shadows=pcf, ?bench=1&size=WxH (window.__sample: poses idle / run / aerial).
+// ?fps=60, ?profile=N, ?shadows=pcf, ?gbuffer=1, ?aa=, ?cascades=, 0.8.0: ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1,
+// ?lut=warm|bleach, ?aonormals=gbuffer (samples/shared/fx-flags.js); ?bench=1&size=WxH (window.__sample: poses idle / run / aerial).
 // window.__character = { engine, cc, ctl, rig (the active one), ... } for the console.
 import * as THREE from 'three';
 import { Engine, Assets, Entity, EntitySystem, Events, createBenchHarness, readBenchParams } from '@vibe/engine/core';
@@ -19,6 +20,7 @@ import { ThirdPersonRig, FirstPersonRig, OrbitRig } from '@vibe/engine/camera';
 import { LoadingScreen } from '@vibe/engine/ui';
 import { buildProceduralCharacter, mapGltfCharacter } from './rig.js';
 import { HUD, ACCENT, applyTheme } from './hud.js';
+import { readFxFlags, aoFlags, loadLut, fxSettings } from '../shared/fx-flags.js';
 
 const params = new URLSearchParams(location.search);
 const NOFX = params.has('nofx') && params.get('nofx') !== '0';
@@ -342,7 +344,9 @@ async function boot() {
   if (!NOFX) {
     try {
       const { width, height } = engine.size;
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8 }, msaaMaxPixels: MSAA_MAX, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto' });
+      // 0.8.0 knobs (samples/shared/fx-flags.js): ?ssr=1, ?volumetric=1, ?motionblur=<s>, ?dof=1, ?lut=<name>, ?aonormals=gbuffer
+      const fx = readFxFlags(params), lut = await loadLut(params);
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8, ...aoFlags(params) }, msaaMaxPixels: MSAA_MAX, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto', ...fx, lut });
       player.traverse((o) => { if (o.isMesh) postfx.track(o); }); // the character moves: per-object velocity (replayed whenever the G-buffer is built)
     } catch (e) { console.warn('[character] post-processing unavailable', e); atmo.setFogMode('scene'); }
   }
@@ -417,6 +421,7 @@ async function boot() {
       'postfx.aa': { get: () => (postfx ? postfx.aa : null), set: (v) => { if (postfx) postfx.set('aa', v); } },
       'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
       'postfx.ao': { get: () => !!(postfx && postfx.ao.enabled), set: (v) => { if (postfx) postfx.ao.enabled = !!v; } },
+      ...fxSettings(() => postfx), // 0.8.0: postfx.ssr / volumetric / motionBlur / dof / lut.strength / ao.normals (+ their options)
     },
   });
   animator.frozen = () => harness.frozen;

@@ -9,7 +9,7 @@
 // range lit through ClusteredLights (one pose, plus in-page checks: cluster lights in view, no failed program, no
 // black frame), so a GLSL error in the clustered chunks shows up here.
 //
-//   node test/browser/smoke.mjs                        # canyon-run, city, character, sandbox, city-clustered
+//   node test/browser/smoke.mjs                        # canyon-run, city, character, sandbox, city-clustered, canyon-night, city-water
 //   node test/browser/smoke.mjs city --headed --size=1600x900 [--config=other.vite.config.js]
 import {
   defaultSize, repoRoot, legacyGlobals, readyTimeoutMs, parseArgs, parseSize, startVite, resolvePage, launchChrome,
@@ -17,10 +17,15 @@ import {
 } from './playwright.config.mjs';
 
 // extra query per page: the city without traffic or tile streaming (async tile builds could land between captures)
-const PAGE_QUERY = { city: 'notraffic&nostream=1', sandbox: 'scene=stack', 'city-clustered': 'notraffic&nostream=1&clustered&t=night' };
+const PAGE_QUERY = {
+  city: 'notraffic&nostream=1', sandbox: 'scene=stack', 'city-clustered': 'notraffic&nostream=1&clustered&t=night',
+  // 0.8.0: the canyon at night with the clustered lamp field and the GPU dust devils; the city's water refraction (needs a
+  // single-sampled scene target: the G-buffer path, with FXAA rather than TAA, whose captures are never hash-stable) at the shore
+  'canyon-night': 'lamps=1&gpuparticles=1&t=night', 'city-water': 'notraffic&nostream=1&water=refraction&gbuffer=1&aa=fxaa',
+};
 // pages that are another page with a different query, and the poses they run (default: all)
-const PAGE_PATH = { 'city-clustered': 'city' };
-const PAGE_POSES = { 'city-clustered': ['street'] };
+const PAGE_PATH = { 'city-clustered': 'city', 'canyon-night': 'canyon-run', 'city-water': 'city' };
+const PAGE_POSES = { 'city-clustered': ['street'], 'canyon-night': ['night-lamps', 'devils'], 'city-water': ['shore'] };
 // in-page checks after each pose: a failure message or ''
 const PAGE_CHECK = {
   'city-clustered': () => {
@@ -37,11 +42,27 @@ const PAGE_CHECK = {
     const mean = sum / (cap.data.length / 4) / (cap.scale * cap.scale);
     return mean < 1 ? `black frame (mean brightest channel ${mean.toFixed(2)} / 255)` : '';
   },
+  'canyon-night': () => {
+    const C = window.__canyon;
+    if (!C || !C.lamps) return 'window.__canyon.lamps missing (lamp field not built)';
+    if (!(C.atmo.darkness > 0.3)) return `not night (darkness ${C.atmo.darkness})`;
+    if (!(C.lamps.clustered && C.lamps.clustered.count > 0)) return 'no cluster lights';
+    if (!(C.devils && C.devils.gpu)) return 'devils are not on the GPU particle system';
+    const bad = C.engine.renderer.info.programs.filter((p) => p.diagnostics && !p.diagnostics.runnable).length;
+    return bad ? `${bad} program(s) failed to compile` : '';
+  },
+  'city-water': () => {
+    const C = window.__city, w = C && C.world;
+    if (!w || !w.sceneCopy) return 'world.sceneCopy missing (water refraction not built)';
+    if (!w.sceneCopy.valid) return 'scene copy invalid (multisampled or depth-less scene target)';
+    const bad = C.engine.renderer.info.programs.filter((p) => p.diagnostics && !p.diagnostics.runnable).length;
+    return bad ? `${bad} program(s) failed to compile` : '';
+  },
 };
 const STEP_MS = 90000;
 
 const args = parseArgs();
-const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox', 'city-clustered'];
+const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox', 'city-clustered', 'canyon-night', 'city-water'];
 const size = parseSize(args.size || defaultSize);
 const headless = !args.headed;
 const mac = process.platform === 'darwin';

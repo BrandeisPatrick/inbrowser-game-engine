@@ -136,6 +136,120 @@ devils switch in 0.8.0). TAA captures are not bit-stable across frames by constr
 > 2 / 255 per frame), so TAA gates use `meanAbs` on converged frames (`quiet` resets the history and renders 32
 frames).
 
+## Render pipeline (0.8.0): screen-space reflections, volumetrics, water refraction, lens passes, LUT
+Five opt-in stages on top of the 0.7.0 pipeline, composed by `PostFX` in the order Scene -> Exposure -> AO -> **SSR**
+-> **Volumetric** -> TAA -> **MotionBlur** -> **DoF** -> Bloom -> Final (`postfx.colorSource` is the output of the
+last enabled pass of TAA -> MotionBlur -> DoF, read by Bloom and Final). Every option is off by default and the
+default output is byte-identical to 0.7.0: the new GLSL lives under defines that are absent by default (`FINAL_SSR`,
+`FINAL_VOLUMETRIC`, `FINAL_LUT`, `TAA_SSR`), pinned by sha1 in `test/postfx-options.mjs`, and `npm run smoke` hashes
+every default pose equal to the 0.7.0 gate. All knobs are live through `postfx.set(path, value)` / `postfx.get(path)`
+(`'ssr'`, `'ssr.<option>'`, `'volumetric'`, `'volumetric.<option>'`, `'motionBlur'` (0 removes the pass),
+`'motionBlur.<option>'`, `'dof'` (null | true | options), `'dof.<option>'`, `'lut'`, `'lut.strength'`,
+`'ao.normals'`); passes that need the G-buffer (ssr, motionBlur, `ao.normals: 'gbuffer'`) throw without
+`gbuffer: true` and are rebuilt whenever the G-buffer is, volumetrics need an Atmosphere.
+- **Screen-space reflections** (`passes/SSRPass.js`, `ssr: { scale 0.5, maxPixels, steps 24, refine 4, maxDistance
+  80, thickness 0.4, thicknessScale 0, maxRoughness 0.5, edgeFade 0.1, jitter false, metalTint true }`): a
+  perspective-correct screen-space march on the scene depth from the G-buffer normal, bisection refinement, the
+  current frame's colour at the hit; the output is PREMULTIPLIED (rgb = reflection * w, a = w, w = hit confidence *
+  the Fresnel / env-BRDF specular share * edge / roughness / distance fades), composited as `col * (1 - a) + rgb`
+  inside the TAA resolve (every 3x3 tap, so the variance clip keeps the reflection) or in the final pass when TAA is
+  off. The G-buffer has no base colour, so the specular share of metals is a heuristic (capped so a pixel never
+  reflects more than it renders; an F0 nibble in the G-buffer is a 0.9.0 item), and there is no roughness blur: a
+  mirror-sharp hit fades out between roughness 0.3 and 0.5. `jitter` is off because the TAA hook composites one
+  reflection sample into all nine taps, so a jittered march cannot converge through the clip box.
+- **GTAO on G-buffer normals** (`AOPass({ normals: 'gbuffer' })`, `ao.normals`): one normal fetch replaces the
+  nine-tap depth reconstruction and normal maps feed the AO; the image changes (and can show dark fringes on
+  normal-mapped grazing surfaces), so it stays opt-in.
+- **Volumetric sun light** (`passes/VolumetricPass.js`, `volumetric: { scale 0.25, maxPixels, steps 16, maxDistance
+  400, g 0.55, density 1, temporal true, blend 0.9, jitter true, intensity 1 }`): a quarter-resolution march through
+  THE SAME medium the final pass fogs with (the atmosphere's haze + mist exponential layers, `density` scales it),
+  accumulating the sun's single scattering (Henyey-Greenstein phase, transmittance from the closed-form optical
+  depth, visibility from the cascade shadow maps: compare-mode depth textures for 'fast' / 'pcss', packed maps for
+  'pcf', the same cascade walk as `shadowCascade.js`), temporally accumulated with the camera history (2x2
+  depth-aware disocclusion). Output RG16F: r = in-scatter per unit sun irradiance, g = linear depth; the final pass
+  adds `sunColor * sun.intensity * intensity * upsample(r)` after the fog and drops the analytic sun-glow term. The
+  units are physical: in Canyon Run's thin desert haze (optical depth ~0.08 over 400 m) and inside a canyon whose
+  air is in the walls' shadow, the shafts are faint by construction; `density` and `intensity` are the look knobs.
+  Past the far cascade box (260 m by default) the air counts as lit.
+- **Water refraction** (`world/Water.js` `createWaterMaterial({ refraction })`, `MapWorld({ water: { refraction:
+  false } })`, `world.setWaterRefraction`, `render/SceneCopy.js`): `SceneCopy` copies the bound scene target's
+  colour + depth into a half-resolution RGBA16F + R32F pair right before the water draws (its `onBeforeRender`, one
+  copy per frame shared by every attached mesh, the target / viewport restored as three's own Reflector does), and
+  the water samples it with a slope-driven uv distortion, Beer-Lambert absorption by water depth, murk toward the
+  body colour and depth foam at pilings and walls. It needs a single-sampled scene target (the G-buffer path or
+  `aa: 'fxaa'`: an MSAA target resolves only at the end of the frame), skips with one warning otherwise, and the bay
+  has no floor, so open water reads as full murk and the effect shows along seawalls, piers and boats.
+- **Motion blur** (`passes/MotionBlurPass.js`, `motionBlur: strength | { strength 1, maxBlur 24, tileSize 20,
+  samples 8, shutter 0 }`): McGuire 2012 tile-max / neighbour-max / reconstruction on the G-buffer velocity (camera
+  reprojection where nothing wrote one); a static frame is an exact pass-through; `shutter` (seconds) makes the
+  streak length frame-rate independent.
+- **Depth of field** (`passes/DoFPass.js`, `dof: { focusDistance 12, focalLength 50, fStop 2, sensorHeight 24,
+  maxCoC 12, scale 0.5, samples 24, nearBlur true, stableDepth false }`, `circleOfConfusion()`): a signed thin-lens
+  circle of confusion from the depth, half-resolution far / near gathers (Vogel disc; the near field dilated so it
+  spreads over sharp objects), full-resolution composite; in-focus pixels are an exact pass-through.
+- **3D LUT grading** (`render/Lut.js`, `lut: { texture, size, strength 1 }`, the Assets `lut` value from a `.cube`
+  file): applied to the sRGB output before grain / dither; `identityLut` / `lutFromFunction` / `lutLookup` for tests
+  and procedural grades (the samples ship `luts/warm.cube`, `bleach.cube` and `identity.cube`).
+- **Samples**: every sample takes `?ssr=1&volumetric=1&motionblur=<s>&dof=1&lut=warm&aonormals=gbuffer`
+  (`samples/shared/fx-flags.js`, harness settings `postfx.<path>` for every knob); Canyon Run `?lamps=1` (118
+  trackside lamps on `ClusteredLights`, poses `night-lamps`), `?gpuparticles=1[&devilscollide=1]` (the dust devils
+  on `GpuParticleSystem`, seeded, pose `devils`); the city `?water=refraction` and a `shore` pose; `npm run smoke`
+  adds the `canyon-night` and `city-water` pages.
+
+### Measured (0.8.0, Apple M4, the app's Chromium, `bench/results/2026-10-29-15*-*-p4-*.json`)
+Same-page A/B through `run(plan)` (24 GPU-synchronised frames after 3 warm-up frames per cell, every knob restored
+between settings), pixel change = `meanAbs` against the reference setting on 4x4 box sums (0..255). Canyon Run poses
+straight / chase / aerial / ahead on the G-buffer + TAA page (`?gbuffer=1`): the reference is 10.60 / 11.08 / 11.35
+/ 7.80 ms at 3024x1964 and 7.27 / 7.56 / 8.17 / 5.32 ms at 2560x1440 (the 0.7.0 numbers within noise).
+
+| knob (Canyon Run, G-buffer + TAA) | +ms at 3024x1964 | +ms at 2560x1440 | pixel change |
+|---|---|---|---|
+| `ssr` (scale 0.5, 24 steps, maxRoughness 0.5) | 0.55 / 0.51 / 0.54 / 0.49 | 0.37 / 0.34 / 0.35 / 0.33 | 0.001 / 0.007 / 0 / 0 (nothing glossy in view) |
+| `ssr.scale` 0.25; `steps` 16; `steps` 32 + `refine` 6 | -0.08; +0.02; +0.03 | -0.07; -0.03; -0.01 | same |
+| `ssr.maxRoughness` 0.7 | 0.00 | 0.00 | 0.03 / 1.24 / 0.002 / 0 (the gantry's roughness-0.5 paint reflects) |
+| `volumetric` (scale 0.25, 16 steps) | 0.58 / 0.44 / 0.62 / 0.75 | 0.45 / 0.34 / 0.43 / 0.52 | 0.16 / 0.013 / 0.035 / 0.15 |
+| `volumetric.scale` 0.5; `steps` 32; `steps` 8 | +1.45 / +1.06 / +1.53 / +1.90; +0.84 / +0.60 / +0.87 / +1.12; +0.45 / +0.36 / +0.47 / +0.55 | +0.95 / +0.69 / +1.02 / +1.30; +0.57 / +0.45 / +0.60 / +0.79; +0.33 / +0.24 / +0.31 / +0.38 | identical to 3 decimals (the medium converges at 8 steps on these poses) |
+| `motionBlur` 1 (static pose: exact pass-through) | 2.08 / 2.09 / 2.12 / 1.98 | 1.35 / 1.34 / 1.37 / 1.26 | 0 |
+| `motionBlur.samples` 16 | same (the static early-out) | same | 0 |
+| `dof` (12 m, f/2, scale 0.5, 24 taps) | 2.69 / 2.65 / 2.64 / 2.60 | 1.72 / 1.68 / 1.71 / 1.67 | 1.68 / 0.70 / 1.17 / 1.02 |
+| `dof.scale` 1; `samples` 16; `nearBlur` false | +6.25 / +6.32 / +6.20 / +6.16; -0.13; -0.62 / -0.65 / -0.50 / -0.46 | +4.01 / +3.93 / +3.91 / +3.89; -0.09; -0.41 / -0.45 / -0.33 / -0.33 | 1.56 / 0.58 / 1.13 / 0.97; 1.65 / 0.69 / 1.16 / 1.01; 1.63 / 0.70 / 1.17 / 1.02 |
+| `lut` (warm.cube, 16^3) | 0.04 / -0.03 / 0.04 / 0.04 | 0.03 / 0.01 / 0.00 / 0.02 | 8.1 / 7.6 / 7.6 / 8.7 (the grade) |
+| `ao.normals: 'gbuffer'` | 0.09 / 0.07 / 0.09 / 0.08 | 0.05 / 0.07 / 0.08 / 0.04 | 0.020 / 0.022 / 0.001 / 0.010 |
+| all of the above on | 6.00 / 5.92 / 6.06 / 6.05 | 3.83 / 3.77 / 3.86 / 3.85 | 9.4 / 8.1 / 8.2 / 9.4 |
+
+Forward path (no G-buffer; FXAA at 3024x1964, 4x MSAA at 2560x1440; reference 8.50 / 8.59 / 8.80 / 5.55 and 7.42 /
+7.56 / 8.63 / 5.23 ms): `volumetric` +0.32 / +0.51 / +0.60 / +0.81 and +0.14 / +0.24 / +0.36 / +0.54 (scale 0.5:
++1.19 / +1.13 / +1.53 / +2.02 and +0.68 / +0.64 / +1.03 / +1.30), `dof` +2.18 / +2.52 / +2.35 / +2.46 and +1.30 /
++1.58 / +1.52 / +1.48, `lut` 0, all three +2.83 / +3.07 / +3.11 / +3.27 and +1.78 / +1.83 / +1.94 / +2.08.
+The lens passes are bandwidth: motion blur always pays its full-resolution velocity + tile passes and the
+reconstruction's two reads (2.0 ms at 5.9 Mpx even when every pixel early-outs), DoF its prefilter + two
+half-resolution gathers + composite (2.6 ms; `scale` 1 triples the gathers). SSR and volumetrics are cheap on these
+scenes because most pixels early-out (rough surfaces, shadowed air) and the march runs at a quarter / sixteenth of
+the pixels; `steps` barely moves either.
+
+Canyon Run at night (`?lamps=1&t=night`, 118 clustered lamps, 12 in the `night-lamps` view, forward path): lamps off
+8.01 / 8.72 / 8.35 ms (night-lamps / chase / straight) -> on 8.28 / 9.14 / 8.85 at 3024x1964 (5.73 / 6.24 / 5.89 ->
+5.74 / 6.40 / 6.24 at 2560x1440); pixel change 24.5 / 18.1 / 28.6 (the track is lit). The `devils` pose on
+`GpuParticleSystem` renders at 8.74 ms (3024x1964, 90 live particles, frozen between captures; the per-frame
+compute cost is the 0.7.0 author's 0.2 ms CPU figure, not re-measured here).
+
+City (`?notraffic&nostream=1`): water refraction on the G-buffer + FXAA page, poses shore / street: off 8.08 / 10.16
+ms -> on 8.80 / 10.75 at 3024x1964 (5.82 / 7.52 -> 6.29 / 7.89 at 2560x1440), pixel change 0.026 / 0 (open water is
+full murk; the effect lives along walls and piers); the copy's own size hardly matters (`copyScale` 0.25: +0.59 /
++0.45, 1.0: +1.29 / +1.09; `copyClear` false: same as default): the cost is the mid-frame target switch, and it is
+paid whenever the bay draws (it is never frustum-culled), water in view or not. G-buffer + TAA page, poses shore /
+street / high (reference 10.11 / 12.55 / 13.00 and 7.11 / 9.13 / 9.24 ms): `ssr` +1.58 / +0.49 / +0.79 and +0.85 /
++0.36 / +0.45 (pixel change 1.44 / 0.10 / 0.48: the bay mirrors the warehouse and the piers), `volumetric` +0.94 /
++0.35 / +0.45 and +0.65 / +0.21 / +0.28, `dof` +2.63 / +2.67 / +2.67 and +1.70 / +1.68 / +1.66, `motionBlur` +2.00 /
++2.08 / +2.11 and +1.28 / +1.28 / +1.25, `ao.normals: 'gbuffer'` +0.06 / +0.03 / +0.18 and +0.06 / +0.02 / 0.00
+(pixel change 0.29 / 1.31 / 0.19: the normal-mapped facades), all on +7.28 / +5.98 / +6.21 and +4.57 / +3.73 /
++4.00. Character (idle / run / aerial, G-buffer + TAA, 7.08 / 7.07 / 6.73 and 4.82 / 4.86 / 4.55 ms): `ssr` +0.52
+(0 change: nothing glossy), `volumetric` +0.49 / +0.56 / +0.56 and +0.32 / +0.37 / +0.37 (0.80 / 0.75 / 0.14: the
+shafts through the playground), `motionBlur` +2.02, `dof` +2.65 / +2.68 / +2.62 and +1.69, `lut` 0, all on +5.85 and
++3.74 / +3.75 / +3.83. Sandbox stack (overview / close, 6.93 / 7.32 and 4.61 / 4.95 ms): `ssr` +0.52 / +0.48 (0),
+`volumetric` +0.50 / +0.47, `motionBlur` +2.06 / +2.03, `dof` +2.58 / +2.66, all on +5.85 / +5.80 and +3.73 / +3.73.
+Defaults unchanged by these numbers: nothing is cheap enough to turn on for free, and every pass is a look choice.
+
 ## Physics
 Two cooperating worlds, both pure JS, deterministic and Node-safe (`npm test` runs them headless):
 - `PhysicsWorld` (`physics/PhysicsWorld.js`) is the **query hub**: static AABB grid (buildings, props, canyon
@@ -214,7 +328,7 @@ Phase 5, as are cloth, ropes, soft bodies, buoyancy and fracture).
 | `Traffic.js` | presenter: `Traffic({ world, data, net, props, seed, count, camera, busLivery, worker })` (`build`, `ready`, `update`, `queryColliders`, `setPlayer`, `setCamera`, `summary`, `pose(i)`, `mode`, `perf`, `sim`), `trafficWorkerDefault()` |
 | `TrafficSim.js` + `traffic.worker.js` | simulation core (no scene objects): `TrafficSim({ roads, signals, groundAt \| baked, spawn, seed, count })` (`build`, `update(dt)`, `setView`, `setPlayer`, `readSignals`, `writePoses`, `queryColliders`, `summary`, `bakeError`, `lanes`, `vehicles`), `TrafficSim.roadsFrom(net)`, `buildSignalInfos({ data, net, props })`, `playerInfoFrom(src)`, `TRAFFIC_TYPES`, `POSE_STRIDE`, `typeCounts`; the module worker that runs it |
 | `Vegetation.js` (+ `VegModels.js`, `VegTextures.js`, `VegMaterials.js`) | `buildTreeMeshes(placements, { groundAt, colliders, seed, rules, mix })`, `bakeVegImpostors`, `SPECIES`, `makeVegAtlas`, `createVegMaterial`, `createVegImpostorMaterial` |
-| `Water.js` / `Shore.js` / `Boats.js` | `Water`, `createWaterMaterial`, `buildShoreField`, Gerstner `waveHeight` / `waveSlope`; `Waterfront({ world, renderer, level, waterMat, pondMat, groundMat, ferryDock, islandFill, boats, farland })`, `createGroundMaterial`, `bakeLandClass`, `buildFarLand(json, world, level, opts)`; `Boats({ ..., ferryDock, ferryRoute, ferries, shipRoute, sailZones, sailCount, bridge })` |
+| `Water.js` / `Shore.js` / `Boats.js` | `Water`, `createWaterMaterial({ ..., refraction })` (0.8.0: `setWaterRefraction`, `setWaterSceneTextures`, `updateWaterRefraction`, `WATER_REFRACTION_DEFAULTS`), `buildShoreField`, Gerstner `waveHeight` / `waveSlope`; `Waterfront({ world, renderer, level, waterMat, pondMat, groundMat, ferryDock, islandFill, boats, farland })`, `createGroundMaterial`, `bakeLandClass`, `buildFarLand(json, world, level, opts)`; `Boats({ ..., ferryDock, ferryRoute, ferries, shipRoute, sailZones, sailCount, bridge })` |
 | `geom.js` | `hashStr`, `signedArea`, `pointInRing`, `RingIndex` (exact row-bucketed pointInRing for big rings), `pointInPoly`, `ringBounds`, `centroid`, `sanitizeRing`, `polylineLength` (+ re-exports of `render/noise.js`) |
 | `MeshChunker.js`, `ShadowPasses.js`, `NearestLights.js` | tiled static meshes, per-cascade shadow casters, nearest-N real lights (see Conventions) |
 

@@ -1,0 +1,394 @@
+{
+  "page": "sandbox",
+  "label": "p4-gb-small",
+  "date": "2026-10-29T19:35:27.360Z",
+  "url": "http://localhost:5190/sandbox/?bench=1&size=2560x1440&scene=stack&gbuffer=1&lut=warm",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 13835,
+  "reloads": 0,
+  "settings": [
+    {
+      "label": "gbuffer+taa (ref)",
+      "set": {
+        "postfx.lut": null
+      }
+    },
+    {
+      "label": "ssr",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true
+      }
+    },
+    {
+      "label": "volumetric",
+      "set": {
+        "postfx.lut": null,
+        "postfx.volumetric": true
+      }
+    },
+    {
+      "label": "motionBlur 1",
+      "set": {
+        "postfx.lut": null,
+        "postfx.motionBlur": 1
+      }
+    },
+    {
+      "label": "dof",
+      "set": {
+        "postfx.lut": null,
+        "postfx.dof": true
+      }
+    },
+    {
+      "label": "lut warm",
+      "set": {
+        "postfx.lut": {
+          "texture": {
+            "metadata": {
+              "version": 4.7,
+              "type": "Texture",
+              "generator": "Texture.toJSON"
+            },
+            "uuid": "fe1053b2-e94b-4b7c-92fe-eb49774ba0c5",
+            "name": "",
+            "image": "ce303eb1-afda-4bb0-a24e-0b78d3cc185f",
+            "mapping": 300,
+            "channel": 0,
+            "repeat": [
+              1,
+              1
+            ],
+            "offset": [
+              0,
+              0
+            ],
+            "center": [
+              0,
+              0
+            ],
+            "rotation": 0,
+            "wrap": [
+              1001,
+              1001
+            ],
+            "format": 1023,
+            "internalFormat": null,
+            "type": 1016,
+            "colorSpace": "",
+            "minFilter": 1006,
+            "magFilter": 1006,
+            "anisotropy": 1,
+            "flipY": false,
+            "generateMipmaps": false,
+            "premultiplyAlpha": false,
+            "unpackAlignment": 1
+          },
+          "size": 16,
+          "strength": 1
+        }
+      }
+    },
+    {
+      "label": "ao.normals gbuffer",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ao.normals": "gbuffer"
+      }
+    },
+    {
+      "label": "all on",
+      "set": {
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.motionBlur": 1,
+        "postfx.dof": true,
+        "postfx.ao.normals": "gbuffer",
+        "postfx.lut": {
+          "texture": {
+            "metadata": {
+              "version": 4.7,
+              "type": "Texture",
+              "generator": "Texture.toJSON"
+            },
+            "uuid": "fe1053b2-e94b-4b7c-92fe-eb49774ba0c5",
+            "name": "",
+            "image": "ce303eb1-afda-4bb0-a24e-0b78d3cc185f",
+            "mapping": 300,
+            "channel": 0,
+            "repeat": [
+              1,
+              1
+            ],
+            "offset": [
+              0,
+              0
+            ],
+            "center": [
+              0,
+              0
+            ],
+            "rotation": 0,
+            "wrap": [
+              1001,
+              1001
+            ],
+            "format": 1023,
+            "internalFormat": null,
+            "type": 1016,
+            "colorSpace": "",
+            "minFilter": 1006,
+            "magFilter": 1006,
+            "anisotropy": 1,
+            "flipY": false,
+            "generateMipmaps": false,
+            "premultiplyAlpha": false,
+            "unpackAlignment": 1
+          },
+          "size": 16,
+          "strength": 1
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "overview",
+      "ms": 4.608,
+      "fps": 217,
+      "hash": "518b91b1",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "close",
+      "ms": 4.95,
+      "fps": 202.02,
+      "hash": "ecccaee6",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "ssr",
+      "pose": "overview",
+      "ms": 4.933,
+      "fps": 202.7,
+      "hash": "518b91b1",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 27,
+      "triangles": 2796
+    },
+    {
+      "setting": "ssr",
+      "pose": "close",
+      "ms": 5.279,
+      "fps": 189.42,
+      "hash": "ecccaee6",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 27,
+      "triangles": 2796
+    },
+    {
+      "setting": "volumetric",
+      "pose": "overview",
+      "ms": 4.954,
+      "fps": 201.85,
+      "hash": "eede6288",
+      "meanAbs": 0.1453,
+      "p99": 0.979,
+      "max": 1.896,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 27,
+      "triangles": 2796
+    },
+    {
+      "setting": "volumetric",
+      "pose": "close",
+      "ms": 5.263,
+      "fps": 190.02,
+      "hash": "0200ca45",
+      "meanAbs": 0.1879,
+      "p99": 0.958,
+      "max": 2.042,
+      "pctOver2": 0.002,
+      "pctOver8": 0,
+      "drawCalls": 27,
+      "triangles": 2796
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "overview",
+      "ms": 5.917,
+      "fps": 169.01,
+      "hash": "518b91b1",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 31,
+      "triangles": 2800
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "close",
+      "ms": 6.221,
+      "fps": 160.75,
+      "hash": "ecccaee6",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 31,
+      "triangles": 2800
+    },
+    {
+      "setting": "dof",
+      "pose": "overview",
+      "ms": 6.275,
+      "fps": 159.36,
+      "hash": "a2740c41",
+      "meanAbs": 0.5401,
+      "p99": 5.146,
+      "max": 24.292,
+      "pctOver2": 6.105,
+      "pctOver8": 0.5,
+      "drawCalls": 32,
+      "triangles": 2801
+    },
+    {
+      "setting": "dof",
+      "pose": "close",
+      "ms": 6.7,
+      "fps": 149.25,
+      "hash": "49026ede",
+      "meanAbs": 2.0223,
+      "p99": 26.5,
+      "max": 84.604,
+      "pctOver2": 19.188,
+      "pctOver8": 7.825,
+      "drawCalls": 32,
+      "triangles": 2801
+    },
+    {
+      "setting": "lut warm",
+      "pose": "overview",
+      "ms": 4.604,
+      "fps": 217.19,
+      "hash": "0181af7e",
+      "meanAbs": 5.7057,
+      "p99": 9.104,
+      "max": 9.75,
+      "pctOver2": 99.976,
+      "pctOver8": 13.05,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "lut warm",
+      "pose": "close",
+      "ms": 4.954,
+      "fps": 201.85,
+      "hash": "007bbe94",
+      "meanAbs": 6.4317,
+      "p99": 9.292,
+      "max": 9.688,
+      "pctOver2": 99.695,
+      "pctOver8": 27.617,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "overview",
+      "ms": 4.667,
+      "fps": 214.29,
+      "hash": "be407b2a",
+      "meanAbs": 0.0083,
+      "p99": 0.021,
+      "max": 8.875,
+      "pctOver2": 0.15,
+      "pctOver8": 0.006,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "close",
+      "ms": 4.987,
+      "fps": 200.5,
+      "hash": "ebccc749",
+      "meanAbs": 0.0062,
+      "p99": 0.125,
+      "max": 5.563,
+      "pctOver2": 0.017,
+      "pctOver8": 0,
+      "drawCalls": 26,
+      "triangles": 2795
+    },
+    {
+      "setting": "all on",
+      "pose": "overview",
+      "ms": 8.337,
+      "fps": 119.94,
+      "hash": "a87f7944",
+      "meanAbs": 5.9778,
+      "p99": 9.75,
+      "max": 30,
+      "pctOver2": 99.978,
+      "pctOver8": 15.019,
+      "drawCalls": 39,
+      "triangles": 2808
+    },
+    {
+      "setting": "all on",
+      "pose": "close",
+      "ms": 8.675,
+      "fps": 115.27,
+      "hash": "e6112d54",
+      "meanAbs": 7.6833,
+      "p99": 30.75,
+      "max": 90.146,
+      "pctOver2": 99.657,
+      "pctOver8": 38.621,
+      "drawCalls": 39,
+      "triangles": 2808
+    }
+  ]
+}

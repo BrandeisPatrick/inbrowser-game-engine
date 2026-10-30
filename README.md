@@ -17,11 +17,12 @@ import { MapWorld } from '@vibe/engine/world';      // subpath per layer: core, 
 - From git: `npm install github:BrandeisPatrick/inbrowser-game-engine` (pure ES module source, no build step).
 - Standalone: `npm install`, then `npm run dev` serves the samples at http://localhost:5190 (Canyon Run at
   `/canyon-run/`; knobs: `?fps=60` tick cap, `?shadows=pcf|fast|pcss`, `?cascades=2|3|4`, `?gbuffer=1`,
-  `?aa=taa|fxaa|msaa`, `?msaamax=`, `?procworkers=0`, city `?clustered`; see ENGINE.md "MacBook pass" and "Render
-  pipeline (0.7.0)"), `npm test` runs every headless suite (`test/all.mjs`, Node >= 20), `npm run build` builds the
+  `?aa=taa|fxaa|msaa`, `?msaamax=`, `?procworkers=0`, city `?clustered`, 0.8.0: `?ssr=1`, `?volumetric=1`,
+  `?motionblur=1`, `?dof=1`, `?lut=warm`, canyon `?lamps=1&t=night`, `?gpuparticles=1`, city `?water=refraction`; see
+  ENGINE.md "MacBook pass", "Render pipeline (0.7.0)" and "(0.8.0)"), `npm test` runs every headless suite (`test/all.mjs`, Node >= 20), `npm run build` builds the
   samples into `dist/`, `npm run types` emits `types/` from the JSDoc, `npm run smoke` / `npm run bench` drive the
   samples in Chrome (Playwright; see ENGINE.md "Measurement protocol").
-- Peer dependency: `three >= 0.170`. `npm run pack:check` lists the tarball (~136 files, ~790 kB) for
+- Peer dependency: `three >= 0.170`. `npm run pack:check` lists the tarball (~142 files, ~855 kB) for
   `npm publish --access public` once a registry scope exists.
 
 ## Samples and tests

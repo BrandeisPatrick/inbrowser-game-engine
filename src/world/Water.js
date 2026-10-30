@@ -17,6 +17,33 @@
 // - Horizon: the far end of the disk fades into the (tone-mapped) sky colour in the view direction, sampled from
 //   the same PMREM environment the sky box is rendered from, so the water meets the sky box seamlessly at the
 //   camera far plane.
+// - Refraction (opt-in, 0.8.0; `createWaterMaterial({ refraction })`, default off = the shaders above byte for
+//   byte): the water samples a mid-frame copy of the opaque scene drawn before it (render/SceneCopy.js, colour +
+//   raw depth at half resolution) and becomes see-through where it is shallow. Water depth per fragment = the scene's
+//   linear view depth behind the surface (at the refracted uv; the undistorted uv when the refracted sample is NEARER
+//   than the surface, so foreground objects do not leak in) - the surface's own view depth, clamped to [0, maxDepth].
+//   The scene colour is attenuated by Beer-Lambert absorption exp(-absorption * depth) and the body colour (uDeep /
+//   uShallow, lit as before) takes over with murk: diffuse albedo = body * (1 - exp(-murk * depth)); the transmitted
+//   scene radiance (already lit, HDR linear like the target it came from) is added as emissive times (1 - Fresnel)
+//   (1 - foam) instead of going through the diffuse BRDF, which would light it twice. Specular, sky reflection,
+//   sparkle, glow, horizon fade and the shore-field foam stay as they are; depth foam is added where the water is
+//   shallower than foamDepth (piles, hulls, rip-rap, pier edges). The refraction offset is the wave slope (world xz)
+//   seen in view space, `strength` uv per unit slope within 10 m of the camera and ~ 1 / distance beyond (far water
+//   does not swim), isotropic in pixels. Screen uv = gl_FragCoord.xy / the scene target size (uSceneRes, set per draw
+//   from the bound target: the copy covers the whole target at any scale). Ponds: the same with a nominal 2 m bed
+//   (they are draped 7 cm over undug ground) and no depth foam. Depth linearisation assumes a perspective camera and
+//   a standard depth buffer (uNearFar from the drawing camera); with renderer.capabilities.reversedDepthBuffer the
+//   SceneCopy skips (reason 'reversed', warned once) and the water stays opaque (PostFX refuses reversed depth only
+//   on its G-buffer path, so the forward FXAA path relies on this). The bay has no floor: below the seawall feet
+//   (level - 2.5 m) a ray meets the cleared depth (far plane), i.e. full murk, which is the opaque look of 0.7.0.
+//   Fog: with PostFX's post fog (the default) neither the copy nor the water is fogged in the scene target; with
+//   in-scene fog (PostFX fog off) the copy is already fogged by its own distance and fog_fragment fogs the water
+//   again, so the transmitted part gets fog twice (negligible: murk -> 1 and the offset fades out at range).
+//   API: setWaterSceneTextures(material, color, depth, source) (sampler uniforms; source = the SceneCopy whose
+//   `valid` gates uRefractOn per draw), setWaterRefraction(material, on) (define + cache key, for runtime A/B),
+//   updateWaterRefraction(material, renderer, camera) (per-draw uniforms: the Water mesh calls it itself; call it
+//   from onBeforeRender of other meshes using the material). uRefractOn = 0 (the copy is missing or was skipped this
+//   frame, e.g. on the MSAA path) renders the opaque 0.7.0 look without a recompile.
 // Per frame: uTime / uNight uniforms only (World.update -> Water.update).
 import * as THREE from 'three';
 import { pfbm, mulberry32, clamp } from './geom.js';
@@ -496,11 +523,158 @@ float waterSparkle(vec3 L, vec3 V) {
 }
 `;
 
+// ---- refraction (WATER_REFRACTION, opt-in): every block below is injected only while the define is on, so the
+// shaders of a material without refraction are the 0.7.0 text byte for byte. Blocks are wrapped in
+// '#ifdef WATER_REFRACTION' .. '#endif // WATER_REFRACTION' and inserted at line starts: removing them gives the
+// shader without refraction back exactly (test/water.mjs checks it).
+/** Refraction defaults (createWaterMaterial({ refraction: true }) / setWaterRefraction on a plain material). */
+export const WATER_REFRACTION_DEFAULTS = Object.freeze({
+  strength: 0.035,                          // uv offset per unit of wave slope within 10 m (then ~ 1 / distance)
+  absorption: Object.freeze([0.35, 0.12, 0.08]), // per-metre extinction of the scene behind the surface (Beer-Lambert)
+  murk: 0.6,                                // per-metre rate at which the body colour takes over
+  foamDepth: 0.5,                           // m: extra foam where the water is shallower (contact lines)
+  maxDepth: 30,                             // m: water depth clamp (nothing / the far plane behind = deep)
+});
+const REFRACTION_KEYS = Object.keys(WATER_REFRACTION_DEFAULTS);
+/** The uniforms refraction adds (and nothing else). */
+export const WATER_REFRACTION_UNIFORMS = Object.freeze(['uSceneColor', 'uSceneDepth', 'uSceneRes', 'uRefract', 'uAbsorb', 'uNearFar', 'uRefractOn']);
+const refrBlock = (glsl) => `#ifdef WATER_REFRACTION\n${glsl}\n#endif // WATER_REFRACTION\n`;
+
+const REFR_PARS_F = refrBlock(/* glsl */`uniform sampler2D uSceneColor;      // SceneCopy colour: HDR linear, this frame, before the water
+uniform highp sampler2D uSceneDepth; // SceneCopy depth: raw 0..1, farthest of each 2x2
+uniform vec2 uSceneRes;              // scene target size (px): screen uv = gl_FragCoord.xy / uSceneRes
+uniform vec4 uRefract;               // strength, murk, foamDepth, maxDepth
+uniform vec3 uAbsorb;                // per-metre extinction (Beer-Lambert)
+uniform vec2 uNearFar;               // the drawing camera's near / far (perspective)
+uniform float uRefractOn;            // 0: no valid copy this frame (the opaque look, no recompile)
+vec3 wRefr;                          // transmitted scene radiance, added as emissive * (1 - foam)
+float wLinDepth(float d) { return uNearFar.x * uNearFar.y / (uNearFar.y - d * (uNearFar.y - uNearFar.x)); }`);
+
+// inside WATER_MAIN_F, right before the foam is final: the body colour `col` and `foam` are still open
+const REFR_MAIN_ANCHOR = '  wFoam = clamp(foam, 0.0, 1.0);\n';
+const REFR_MAIN_F = refrBlock(/* glsl */`  wRefr = vec3(0.0);
+  if (uRefractOn > 0.5) {
+    vec2 suv = gl_FragCoord.xy / uSceneRes;
+    float zs = vViewPosition.z;                                   // the surface's own view depth (m)
+    float z0 = wLinDepth(texture2D(uSceneDepth, suv).r);         // the scene behind it, undistorted
+    // refraction offset: the wave slope (world xz) seen in view space; full strength within 10 m, then ~ 1 / distance
+    vec2 off = (viewMatrix * vec4(wN.x, 0.0, wN.z, 0.0)).xy * (uRefract.x * min(1.0, 10.0 / max(dist, 1e-3)));
+    off.x *= uSceneRes.y / uSceneRes.x;                           // isotropic in pixels
+    vec2 ruv = suv + off;
+    float zr = wLinDepth(texture2D(uSceneDepth, ruv).r);
+    if (zr < zs) { ruv = suv; zr = z0; }                         // the offset landed on a foreground object
+    float dep = clamp(zr - zs, 0.0, uRefract.w);                 // water depth along the view (m)
+#ifdef WATER_POND
+    dep += 2.0;                                                   // draped over undug ground: a nominal bed
+#endif
+    float murkF = 1.0 - exp(-uRefract.y * dep);                  // share of the body colour
+    float fr = 0.02 + 0.98 * pow(1.0 - clamp(dot(wN, Vw), 0.0, 1.0), 5.0); // Schlick, F0 0.02: reflected, not transmitted
+    wRefr = texture2D(uSceneColor, ruv).rgb * exp(-uAbsorb * dep) * ((1.0 - murkF) * (1.0 - fr));
+    col *= murkF;
+#ifndef WATER_POND
+    // depth foam at contact lines (piles, hulls, rip-rap, pier edges): the undistorted depth, so it hugs the line
+    float dfoam = (1.0 - smoothstep(0.0, max(uRefract.z, 1e-3), z0 - zs)) * (1.0 - smoothstep(150.0, 600.0, hd)) * step(-0.6, sd);
+    if (dfoam > 0.0) foam = max(foam, dfoam * (0.45 + 0.55 * texture2D(uNoise, p / 2.3 + vec2(-0.05, 0.03) * uTime).b));
+#endif
+  }`);
+if (!WATER_MAIN_F.includes(REFR_MAIN_ANCHOR)) throw new Error('[Water] refraction anchor missing in WATER_MAIN_F');
+const WATER_MAIN_F_REFR = WATER_MAIN_F.replace(REFR_MAIN_ANCHOR, REFR_MAIN_F + REFR_MAIN_ANCHOR);
+// the emissive line is followed by '\n' in three's shader: the block goes in without its last newline
+const REFR_EMISSIVE = '\n' + refrBlock('totalEmissiveRadiance += wRefr * ( 1.0 - wFoam );').slice(0, -1);
+
+/**
+ * True while the material renders with refraction (the WATER_REFRACTION define).
+ * @param {THREE.Material} material
+ * @returns {boolean}
+ */
+export function waterRefractionOn(material) {
+  return !!material.defines && material.defines.WATER_REFRACTION !== undefined;
+}
+
+// add the refraction uniforms (once) and apply options; returns the uniform map
+function ensureRefraction(m, o = null) {
+  const u = m.userData.u;
+  if (u.uRefractOn === undefined) {
+    Object.assign(u, {
+      uSceneColor: { value: null }, uSceneDepth: { value: null }, uSceneRes: { value: new THREE.Vector2(1, 1) },
+      uRefract: { value: new THREE.Vector4() }, uAbsorb: { value: new THREE.Vector3() },
+      uNearFar: { value: new THREE.Vector2(0.1, 6000) }, uRefractOn: { value: 0 },
+    });
+    m.userData.refraction = { source: null };
+    applyRefractionOptions(u, WATER_REFRACTION_DEFAULTS);
+  }
+  if (o) applyRefractionOptions(u, { ...WATER_REFRACTION_DEFAULTS, ...o });
+  return u;
+}
+function applyRefractionOptions(u, o) {
+  for (const k in o) if (!REFRACTION_KEYS.includes(k)) throw new Error(`[Water] refraction: unknown option '${k}' (${REFRACTION_KEYS.join(', ')})`);
+  const a = typeof o.absorption === 'number' ? [o.absorption, o.absorption, o.absorption] : o.absorption;
+  if (!Array.isArray(a) || a.length !== 3 || !a.every(Number.isFinite)) throw new Error('[Water] refraction.absorption: a number or [r, g, b] per metre');
+  for (const k of ['strength', 'murk', 'foamDepth', 'maxDepth']) if (!Number.isFinite(o[k])) throw new Error(`[Water] refraction.${k}: a finite number`);
+  u.uRefract.value.set(o.strength, o.murk, o.foamDepth, o.maxDepth);
+  u.uAbsorb.value.set(a[0], a[1], a[2]);
+}
+
+/**
+ * Scene textures the refraction samples (render/SceneCopy.js: copy.color, copy.depth); null = off (uRefractOn 0).
+ * Adds the refraction uniforms if the material has none yet (the define is setWaterRefraction's).
+ * @param {THREE.Material} material  a createWaterMaterial material
+ * @param {THREE.Texture|null} color  HDR scene colour before the water (linear filtering)
+ * @param {THREE.Texture|null} depth  raw scene depth 0..1 (nearest)
+ * @param {{valid: boolean}|null} [source]  the SceneCopy behind the textures: its `valid` gates uRefractOn per draw
+ * @returns {THREE.Material}
+ */
+export function setWaterSceneTextures(material, color, depth, source = null) {
+  const u = ensureRefraction(material);
+  u.uSceneColor.value = color || null;
+  u.uSceneDepth.value = depth || null;
+  material.userData.refraction.source = source || null;
+  if (!color || !depth) u.uRefractOn.value = 0;
+  return material;
+}
+
+/**
+ * Refraction on / off at runtime: toggles the WATER_REFRACTION define and the program cache-key suffix ('-refr'),
+ * sets needsUpdate only when the state changes. Turning it on adds the refraction uniforms (defaults) if missing;
+ * turning it off keeps them (unused without the define). Returns true when the state changed.
+ * @param {THREE.Material} material  a createWaterMaterial material
+ * @param {boolean} on
+ * @returns {boolean}
+ */
+export function setWaterRefraction(material, on) {
+  on = !!on;
+  if (on === waterRefractionOn(material)) return false;
+  if (on) { ensureRefraction(material); (material.defines || (material.defines = {})).WATER_REFRACTION = ''; } else delete material.defines.WATER_REFRACTION;
+  material.needsUpdate = true;
+  return true;
+}
+
+/**
+ * Per-draw refraction uniforms, from the mesh's onBeforeRender (after the SceneCopy hook): uSceneRes = the bound
+ * target's size, uNearFar = the camera's near / far, uRefractOn = 1 when both scene textures are set, the target is
+ * not the canvas and the source copy (if any) is valid. The Water mesh calls it itself; no-op without refraction
+ * uniforms. Allocation-free.
+ * @param {THREE.Material} material
+ * @param {THREE.WebGLRenderer} renderer
+ * @param {THREE.Camera} camera
+ */
+export function updateWaterRefraction(material, renderer, camera) {
+  const u = material.userData.u;
+  if (u.uRefractOn === undefined) return;
+  const rt = renderer.getRenderTarget(), src = material.userData.refraction.source;
+  if (rt !== null) u.uSceneRes.value.set(rt.width, rt.height);
+  if (camera && camera.far) u.uNearFar.value.set(camera.near, camera.far);
+  u.uRefractOn.value = rt !== null && u.uSceneColor.value !== null && u.uSceneDepth.value !== null && (src === null || src.valid === true) ? 1 : 0;
+}
+
 /**
  * Patched MeshStandardMaterial for the bay (pond = true: still water for fountains / ponds, no swell or shore).
- * @param {{normalMap:THREE.Texture, noiseMap:THREE.Texture, shore?:object, pond?:boolean}} o
+ * refraction (default false: the 0.7.0 material exactly): true or { strength, absorption, murk, foamDepth, maxDepth }
+ * (WATER_REFRACTION_DEFAULTS) adds the WATER_REFRACTION define, the uniforms in WATER_REFRACTION_UNIFORMS and the
+ * '-refr' cache-key suffix; it renders opaque until setWaterSceneTextures() gives it a scene copy.
+ * @param {{normalMap:THREE.Texture, noiseMap:THREE.Texture, shore?:object, pond?:boolean, refraction?:boolean|{strength?:number, absorption?:number|number[], murk?:number, foamDepth?:number, maxDepth?:number}}} o
  */
-export function createWaterMaterial({ normalMap, noiseMap, shore = null, pond = false }) {
+export function createWaterMaterial({ normalMap, noiseMap, shore = null, pond = false, refraction = false }) {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.06, metalness: 0, envMapIntensity: 1 });
   m.name = pond ? 'pond' : 'bay';
   const u = {
@@ -520,7 +694,9 @@ export function createWaterMaterial({ normalMap, noiseMap, shore = null, pond = 
   };
   if (pond) m.defines = { WATER_POND: '' };
   m.userData.u = u;
+  if (refraction) { ensureRefraction(m, refraction === true ? null : refraction); m.defines.WATER_REFRACTION = ''; }
   m.onBeforeCompile = (sh) => {
+    const refr = waterRefractionOn(m);
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>\n${WATER_PARS_V}`)
@@ -538,12 +714,12 @@ vec3 wDisp = vec3(0.0);
 }`)
       .replace('#include <begin_vertex>', 'vec3 transformed = vec3( position ) + wDisp;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>\n${WATER_PARS_F}`)
-      .replace('#include <map_fragment>', WATER_MAIN_F)
+      .replace('#include <common>', `#include <common>\n${WATER_PARS_F}` + (refr ? REFR_PARS_F : ''))
+      .replace('#include <map_fragment>', refr ? WATER_MAIN_F_REFR : WATER_MAIN_F)
       .replace('#include <color_fragment>', 'diffuseColor.rgb = wCol;')
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = wRough;' + GBUFFER_CHUNK_TAILS.roughnessmap_fragment)
       .replace('#include <normal_fragment_maps>', 'normal = normalize( ( viewMatrix * vec4( wN, 0.0 ) ).xyz );\nwSparkNv = normalize( ( viewMatrix * vec4( wSparkN, 0.0 ) ).xyz );\nwMeanNv = normalize( ( viewMatrix * vec4( wMeanN, 0.0 ) ).xyz );' + GBUFFER_CHUNK_TAILS.normal_fragment_maps)
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += wGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += wGlow;' + (refr ? REFR_EMISSIVE : ''))
       .replace('#include <lights_physical_fragment>', THREE.ShaderChunk.lights_physical_fragment.replace('vec3( 0.04 )', 'vec3( 0.02 )'))
       .replace('#include <lights_physical_pars_fragment>', SPARKLE_PARS + THREE.ShaderChunk.lights_physical_pars_fragment.replace(
         'reflectedLight.directSpecular += irradiance * BRDF_GGX( directLight.direction, geometryViewDir, geometryNormal, material );',
@@ -579,7 +755,7 @@ if ( wHorizon > 0.0 ) {
 }
 #endif`);
   };
-  m.customProgramCacheKey = () => (pond ? 'roadster-pond-3' : 'roadster-bay-3');
+  m.customProgramCacheKey = () => (pond ? 'roadster-pond-3' : 'roadster-bay-3') + (waterRefractionOn(m) ? '-refr' : '');
   return m;
 }
 
@@ -652,6 +828,7 @@ export class Water {
       const e = cam.matrixWorld.elements;
       mesh.matrixWorld.makeTranslation(Math.round(e[12] / step) * step, lvl, Math.round(e[14] / step) * step);
       if (cam.far) u.uFar.value = cam.far;
+      if (u.uRefractOn !== undefined) updateWaterRefraction(this.material, renderer, cam); // refraction uniforms exist
     };
     this.mesh = mesh;
     return mesh;

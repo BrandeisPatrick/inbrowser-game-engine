@@ -1,0 +1,47 @@
+{
+  "page": "canyon-run",
+  "label": "p4-devils",
+  "date": "2026-10-29T19:30:25.468Z",
+  "url": "http://localhost:5190/canyon-run/?bench=1&size=3024x1964&gpuparticles=1&t=afternoon",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 48,
+  "warmup": 3,
+  "runMs": 710,
+  "reloads": 0,
+  "poses": [
+    "devils"
+  ],
+  "settings": [
+    {
+      "label": "current",
+      "set": {}
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "devils",
+      "ms": 8.735,
+      "fps": 114.48,
+      "hash": "0594c0c9",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 46,
+      "triangles": 612034
+    }
+  ]
+}

@@ -1,0 +1,506 @@
+{
+  "page": "character",
+  "label": "p4-gb-small",
+  "date": "2026-10-29T19:31:57.832Z",
+  "url": "http://localhost:5190/character/?bench=1&size=3024x1964&gbuffer=1&lut=warm",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 14234,
+  "reloads": 0,
+  "settings": [
+    {
+      "label": "gbuffer+taa (ref)",
+      "set": {
+        "postfx.lut": null
+      }
+    },
+    {
+      "label": "ssr",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ssr": true
+      }
+    },
+    {
+      "label": "volumetric",
+      "set": {
+        "postfx.lut": null,
+        "postfx.volumetric": true
+      }
+    },
+    {
+      "label": "motionBlur 1",
+      "set": {
+        "postfx.lut": null,
+        "postfx.motionBlur": 1
+      }
+    },
+    {
+      "label": "dof",
+      "set": {
+        "postfx.lut": null,
+        "postfx.dof": true
+      }
+    },
+    {
+      "label": "lut warm",
+      "set": {
+        "postfx.lut": {
+          "texture": {
+            "metadata": {
+              "version": 4.7,
+              "type": "Texture",
+              "generator": "Texture.toJSON"
+            },
+            "uuid": "c92f1569-29ab-4cde-88c6-fa50ebffcc56",
+            "name": "",
+            "image": "9d44164f-b70c-4202-8fbf-8061aa61b5c2",
+            "mapping": 300,
+            "channel": 0,
+            "repeat": [
+              1,
+              1
+            ],
+            "offset": [
+              0,
+              0
+            ],
+            "center": [
+              0,
+              0
+            ],
+            "rotation": 0,
+            "wrap": [
+              1001,
+              1001
+            ],
+            "format": 1023,
+            "internalFormat": null,
+            "type": 1016,
+            "colorSpace": "",
+            "minFilter": 1006,
+            "magFilter": 1006,
+            "anisotropy": 1,
+            "flipY": false,
+            "generateMipmaps": false,
+            "premultiplyAlpha": false,
+            "unpackAlignment": 1
+          },
+          "size": 16,
+          "strength": 1
+        }
+      }
+    },
+    {
+      "label": "ao.normals gbuffer",
+      "set": {
+        "postfx.lut": null,
+        "postfx.ao.normals": "gbuffer"
+      }
+    },
+    {
+      "label": "all on",
+      "set": {
+        "postfx.ssr": true,
+        "postfx.volumetric": true,
+        "postfx.motionBlur": 1,
+        "postfx.dof": true,
+        "postfx.ao.normals": "gbuffer",
+        "postfx.lut": {
+          "texture": {
+            "metadata": {
+              "version": 4.7,
+              "type": "Texture",
+              "generator": "Texture.toJSON"
+            },
+            "uuid": "c92f1569-29ab-4cde-88c6-fa50ebffcc56",
+            "name": "",
+            "image": "9d44164f-b70c-4202-8fbf-8061aa61b5c2",
+            "mapping": 300,
+            "channel": 0,
+            "repeat": [
+              1,
+              1
+            ],
+            "offset": [
+              0,
+              0
+            ],
+            "center": [
+              0,
+              0
+            ],
+            "rotation": 0,
+            "wrap": [
+              1001,
+              1001
+            ],
+            "format": 1023,
+            "internalFormat": null,
+            "type": 1016,
+            "colorSpace": "",
+            "minFilter": 1006,
+            "magFilter": 1006,
+            "anisotropy": 1,
+            "flipY": false,
+            "generateMipmaps": false,
+            "premultiplyAlpha": false,
+            "unpackAlignment": 1
+          },
+          "size": 16,
+          "strength": 1
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "idle",
+      "ms": 7.079,
+      "fps": 141.26,
+      "hash": "db47780a",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 63,
+      "triangles": 6971
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "run",
+      "ms": 7.067,
+      "fps": 141.51,
+      "hash": "81fd1bae",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 63,
+      "triangles": 6971
+    },
+    {
+      "setting": "gbuffer+taa (ref)",
+      "pose": "aerial",
+      "ms": 6.729,
+      "fps": 148.61,
+      "hash": "87c47126",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 64,
+      "triangles": 6977
+    },
+    {
+      "setting": "ssr",
+      "pose": "idle",
+      "ms": 7.596,
+      "fps": 131.65,
+      "hash": "db47780a",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 64,
+      "triangles": 6972
+    },
+    {
+      "setting": "ssr",
+      "pose": "run",
+      "ms": 7.604,
+      "fps": 131.51,
+      "hash": "81fd1bae",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 64,
+      "triangles": 6972
+    },
+    {
+      "setting": "ssr",
+      "pose": "aerial",
+      "ms": 7.3,
+      "fps": 136.99,
+      "hash": "87c47126",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 65,
+      "triangles": 6978
+    },
+    {
+      "setting": "volumetric",
+      "pose": "idle",
+      "ms": 7.571,
+      "fps": 132.09,
+      "hash": "a8a63222",
+      "meanAbs": 0.7993,
+      "p99": 3.375,
+      "max": 4.083,
+      "pctOver2": 15.66,
+      "pctOver8": 0,
+      "drawCalls": 64,
+      "triangles": 6972
+    },
+    {
+      "setting": "volumetric",
+      "pose": "run",
+      "ms": 7.629,
+      "fps": 131.08,
+      "hash": "394cc8a9",
+      "meanAbs": 0.7457,
+      "p99": 3.417,
+      "max": 4.479,
+      "pctOver2": 14.519,
+      "pctOver8": 0,
+      "drawCalls": 64,
+      "triangles": 6972
+    },
+    {
+      "setting": "volumetric",
+      "pose": "aerial",
+      "ms": 7.292,
+      "fps": 137.14,
+      "hash": "2d89105b",
+      "meanAbs": 0.1418,
+      "p99": 0.667,
+      "max": 0.979,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 65,
+      "triangles": 6978
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "idle",
+      "ms": 9.1,
+      "fps": 109.89,
+      "hash": "db47780a",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 68,
+      "triangles": 6976
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "run",
+      "ms": 9.104,
+      "fps": 109.84,
+      "hash": "81fd1bae",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 68,
+      "triangles": 6976
+    },
+    {
+      "setting": "motionBlur 1",
+      "pose": "aerial",
+      "ms": 8.875,
+      "fps": 112.68,
+      "hash": "87c47126",
+      "meanAbs": 0,
+      "p99": 0,
+      "max": 0,
+      "pctOver2": 0,
+      "pctOver8": 0,
+      "drawCalls": 69,
+      "triangles": 6982
+    },
+    {
+      "setting": "dof",
+      "pose": "idle",
+      "ms": 9.725,
+      "fps": 102.83,
+      "hash": "3c935704",
+      "meanAbs": 1.0335,
+      "p99": 15.5,
+      "max": 73.167,
+      "pctOver2": 11.878,
+      "pctOver8": 3.179,
+      "drawCalls": 69,
+      "triangles": 6977
+    },
+    {
+      "setting": "dof",
+      "pose": "run",
+      "ms": 9.746,
+      "fps": 102.61,
+      "hash": "5d3a3ab3",
+      "meanAbs": 0.9767,
+      "p99": 14.208,
+      "max": 72.063,
+      "pctOver2": 12.082,
+      "pctOver8": 2.88,
+      "drawCalls": 69,
+      "triangles": 6977
+    },
+    {
+      "setting": "dof",
+      "pose": "aerial",
+      "ms": 9.35,
+      "fps": 106.95,
+      "hash": "62f4e30e",
+      "meanAbs": 1.3199,
+      "p99": 10.271,
+      "max": 65.229,
+      "pctOver2": 23.006,
+      "pctOver8": 1.415,
+      "drawCalls": 70,
+      "triangles": 6983
+    },
+    {
+      "setting": "lut warm",
+      "pose": "idle",
+      "ms": 7.1,
+      "fps": 140.85,
+      "hash": "a0c7b7b3",
+      "meanAbs": 6.7973,
+      "p99": 9.688,
+      "max": 9.917,
+      "pctOver2": 99.065,
+      "pctOver8": 36.332,
+      "drawCalls": 63,
+      "triangles": 6971
+    },
+    {
+      "setting": "lut warm",
+      "pose": "run",
+      "ms": 7.104,
+      "fps": 140.76,
+      "hash": "50d23063",
+      "meanAbs": 6.5546,
+      "p99": 9.667,
+      "max": 9.854,
+      "pctOver2": 99.179,
+      "pctOver8": 32.943,
+      "drawCalls": 63,
+      "triangles": 6971
+    },
+    {
+      "setting": "lut warm",
+      "pose": "aerial",
+      "ms": 6.792,
+      "fps": 147.24,
+      "hash": "832ece4e",
+      "meanAbs": 5.6601,
+      "p99": 9.167,
+      "max": 9.396,
+      "pctOver2": 99.999,
+      "pctOver8": 9.903,
+      "drawCalls": 64,
+      "triangles": 6977
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "idle",
+      "ms": 7.1,
+      "fps": 140.85,
+      "hash": "bdade8f9",
+      "meanAbs": 0.0051,
+      "p99": 0.104,
+      "max": 8.854,
+      "pctOver2": 0.024,
+      "pctOver8": 0.001,
+      "drawCalls": 63,
+      "triangles": 6971
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "run",
+      "ms": 7.108,
+      "fps": 140.68,
+      "hash": "7792a96d",
+      "meanAbs": 0.0033,
+      "p99": 0.042,
+      "max": 7.104,
+      "pctOver2": 0.023,
+      "pctOver8": 0,
+      "drawCalls": 63,
+      "triangles": 6971
+    },
+    {
+      "setting": "ao.normals gbuffer",
+      "pose": "aerial",
+      "ms": 6.837,
+      "fps": 146.25,
+      "hash": "01e9aa8f",
+      "meanAbs": 0.0013,
+      "p99": 0.021,
+      "max": 3.708,
+      "pctOver2": 0.001,
+      "pctOver8": 0,
+      "drawCalls": 64,
+      "triangles": 6977
+    },
+    {
+      "setting": "all on",
+      "pose": "idle",
+      "ms": 12.929,
+      "fps": 77.34,
+      "hash": "5f35f936",
+      "meanAbs": 7.8216,
+      "p99": 17.146,
+      "max": 75.896,
+      "pctOver2": 99.321,
+      "pctOver8": 43.429,
+      "drawCalls": 76,
+      "triangles": 6984
+    },
+    {
+      "setting": "all on",
+      "pose": "run",
+      "ms": 12.954,
+      "fps": 77.2,
+      "hash": "8d8847f7",
+      "meanAbs": 7.4724,
+      "p99": 15.833,
+      "max": 67.021,
+      "pctOver2": 99.218,
+      "pctOver8": 40.12,
+      "drawCalls": 76,
+      "triangles": 6984
+    },
+    {
+      "setting": "all on",
+      "pose": "aerial",
+      "ms": 12.712,
+      "fps": 78.66,
+      "hash": "d92f613e",
+      "meanAbs": 6.2456,
+      "p99": 14.667,
+      "max": 70.479,
+      "pctOver2": 99.896,
+      "pctOver8": 16.982,
+      "drawCalls": 77,
+      "triangles": 6990
+    }
+  ]
+}
