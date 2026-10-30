@@ -15,11 +15,11 @@ import {
 } from './playwright.config.mjs';
 
 // extra query per page: the city without traffic or tile streaming (async tile builds could land between captures)
-const PAGE_QUERY = { city: 'notraffic&nostream=1' };
+const PAGE_QUERY = { city: 'notraffic&nostream=1', sandbox: 'scene=stack' };
 const STEP_MS = 90000;
 
 const args = parseArgs();
-const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character'];
+const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox'];
 const size = parseSize(args.size || defaultSize);
 const headless = !args.headed;
 const mac = process.platform === 'darwin';

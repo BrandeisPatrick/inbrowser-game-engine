@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0 — 2026-10-29
+Unified XPBD rigid-body dynamics (phase 2 of the 1.0 roadmap, ENGINE.md "Physics" / "DynamicsWorld"): a pure-JS,
+deterministic, Node-testable solver that plugs into the existing `PhysicsWorld` so the vehicle and character
+controllers collide with rigid bodies without changes. Opt-in: nothing moves unless a game creates a
+`DynamicsWorld`; `npm test` keeps the roadster model bit-identical and the 0.5.0 samples render identically.
+- Physics: `DynamicsWorld` — bodies (dynamic / static / kinematic) with sphere, capsule, box, convex hull, static
+  triangle mesh and compound shapes; substepped XPBD with manifold contacts, Coulomb friction with persistent
+  anchors, restitution, damping, islands and sleeping, kinematic targets that push, forces / impulses, `began` /
+  `ended` contact events, ray / shape casts and overlaps, `serialize() / from()` (bit-identical). Joints: fixed,
+  ball, hinge (limits, motor, servo), slider, distance (spring / rope), d6 (swing cone, twist), `breakForce`,
+  solved exactly per joint tree. `attachToPhysicsWorld(dyn, physics)` bridges bodies into the query hub as
+  `kind: 'rigid'` records (layer bit 25). `DynamicsClient` runs the same API in a module Worker (`worker: true`)
+  or in-thread. `PhysicsDebug` (render layer) draws shapes, contacts and joints. 7 new headless suites
+  (`test/dyn-*.mjs`, 600+ checks: analytic contacts to 1e-15, pendulum period within 0.2 %, chain gap 1e-6 m,
+  10-stack drift 3e-15 m, 1000-body pit determinism hash, worker round trip bit-identical).
+- Samples: `samples/sandbox/` at `/sandbox/` — scenes `stack`, `joints`, `chain`, `ragdoll`, `car` (the roadster
+  controller among crates, `?solid=0` bulldozes them through a kinematic proxy) and `bench1000` (`?bodies=`);
+  `?worker=1`, `?debug=1` (F4), `?substeps=`, `?seed=`, bench poses `overview` / `close`. Measured on the M4 in
+  Chrome: 1000 mixed bodies 6.5 ms per step falling, 9.5 ms with 960 awake at 60 Hz, worker 10.7 ms off-thread
+  with 0.5 ms on the main thread; 5 ragdolls sleep within 17 s; bench poses reset + hand-step so captures
+  reproduce across loads.
+- Physics: `PhysicsWorld` reserves `layerOf('rigid')` = bit 25; `CharacterController` and the rigs are unchanged
+  (bridged bodies are walls to them; two-way coupling is phase 5).
+
 ## 0.5.0 — 2026-10-29
 General-engine foundations (phase 1 of the 1.0 roadmap, ENGINE.md "Core services", "Character stack",
 "Measurement protocol"): the services a non-driving game needs, a third-person character stack, and the tooling

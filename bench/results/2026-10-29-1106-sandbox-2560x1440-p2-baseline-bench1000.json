@@ -1,0 +1,56 @@
+{
+  "page": "sandbox",
+  "label": "p2-baseline-bench1000",
+  "date": "2026-10-29T15:06:47.938Z",
+  "url": "http://127.0.0.1:5199/sandbox/?bench=1&size=2560x1440&scene=bench1000",
+  "chrome": "155.0.8059.86",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 2560,
+    "h": 1440,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 912,
+  "reloads": 0,
+  "poses": [
+    "overview",
+    "close"
+  ],
+  "settings": [],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "current",
+      "pose": "overview",
+      "ms": 5.096,
+      "fps": 196.24,
+      "hash": "fa9ada6f",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 39,
+      "triangles": 706458
+    },
+    {
+      "setting": "current",
+      "pose": "close",
+      "ms": 6.183,
+      "fps": 161.73,
+      "hash": "37c1b2c1",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 39,
+      "triangles": 706458
+    }
+  ]
+}
