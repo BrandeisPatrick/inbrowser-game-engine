@@ -21,6 +21,7 @@
 import * as THREE from 'three';
 import { pfbm, mulberry32, clamp } from './geom.js';
 import { Raster } from '../physics/spatial.js';
+import { GBUFFER_CHUNK_TAILS } from '../render/GBuffer.js'; // G-buffer captures for the chunks this material replaces
 
 const G = 9.81;
 // Prevailing westerly: waves run toward the east-north-east (+x east, -z north)
@@ -540,8 +541,8 @@ vec3 wDisp = vec3(0.0);
       .replace('#include <common>', `#include <common>\n${WATER_PARS_F}`)
       .replace('#include <map_fragment>', WATER_MAIN_F)
       .replace('#include <color_fragment>', 'diffuseColor.rgb = wCol;')
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = wRough;')
-      .replace('#include <normal_fragment_maps>', 'normal = normalize( ( viewMatrix * vec4( wN, 0.0 ) ).xyz );\nwSparkNv = normalize( ( viewMatrix * vec4( wSparkN, 0.0 ) ).xyz );\nwMeanNv = normalize( ( viewMatrix * vec4( wMeanN, 0.0 ) ).xyz );')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = wRough;' + GBUFFER_CHUNK_TAILS.roughnessmap_fragment)
+      .replace('#include <normal_fragment_maps>', 'normal = normalize( ( viewMatrix * vec4( wN, 0.0 ) ).xyz );\nwSparkNv = normalize( ( viewMatrix * vec4( wSparkN, 0.0 ) ).xyz );\nwMeanNv = normalize( ( viewMatrix * vec4( wMeanN, 0.0 ) ).xyz );' + GBUFFER_CHUNK_TAILS.normal_fragment_maps)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += wGlow;')
       .replace('#include <lights_physical_fragment>', THREE.ShaderChunk.lights_physical_fragment.replace('vec3( 0.04 )', 'vec3( 0.02 )'))
       .replace('#include <lights_physical_pars_fragment>', SPARKLE_PARS + THREE.ShaderChunk.lights_physical_pars_fragment.replace(

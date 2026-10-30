@@ -5,9 +5,18 @@
 // to a point a little ahead of the camera. Newly assigned slots fade in instead of popping. Selection is
 // throttled (camera moved / turned / timer), so the per-frame cost is a fade step.
 //
+// Clustered mode (opt-in, mode: 'clustered' + a render/ClusteredLights.js instance): no PointLight is created; every
+// candidate within `clusteredRange` of the camera goes into the cluster light list instead (index 0..n-1, then
+// `clustered.count = n`), with the colour / intensity / distance / decay a selected pool light gets (linear colour x
+// intensity, three's PointLight units), faded out over the last `clusteredFade` m of the range so nothing pops. The
+// list is re-pushed when the camera moved 4 m, the intensity changed, the positions changed or the mode switched;
+// intensity 0 empties it (count = 0). Materials then keep one program (NUM_POINT_LIGHTS stays 0 by day and night)
+// where the pool has two (0 / count lights, toggled together). setMode() switches at runtime.
+//
 //   const pool = new NearestLights({ count: 8, color: 0xffc98a, distance: 48, decay: 2, parent: group });
 //   pool.setPositions(xyzFloat32Array);                       // or [[x,y,z], ...]
 //   pool.update(dt, { position, frustum, direction }, intensity);   // intensity 0 switches the pool off
+//   pool.setMode('clustered', clusteredLights);               // or new NearestLights({ ..., mode: 'clustered', clustered })
 import * as THREE from 'three';
 
 const _sph = new THREE.Sphere();
@@ -23,6 +32,10 @@ export class NearestLights {
    * @param {number} [o.heightWeight=0.25]  vertical distance weight in the ranking (lamps far below an aerial
    *        camera still rank by their horizontal distance)
    * @param {number} [o.yOffset=0]  added to each position
+   * @param {'pool'|'clustered'} [o.mode='pool']  'clustered': candidates go to `o.clustered`, no PointLights
+   * @param {object} [o.clustered]  render/ClusteredLights.js instance (setLight / count) for mode 'clustered'
+   * @param {number} [o.clusteredRange=220]  m from the camera: candidates within it are cluster lights (Infinity = all)
+   * @param {number} [o.clusteredFade=30]  m at the end of that range over which they fade out (0 = hard edge)
    */
   constructor(o = {}) {
     this.count = o.count ?? 8;
@@ -30,19 +43,57 @@ export class NearestLights {
     this.lead = o.lead ?? 14;
     this.hw = o.heightWeight ?? 0.25;
     this.yOffset = o.yOffset ?? 0;
+    this.color = new THREE.Color(o.color ?? 0xffffff); // as PointLight.color: linear working space
+    this.decay = o.decay ?? 2;
+    this.parent = o.parent || null; this.name = o.name || 'pool-light';
+    this.clustered = o.clustered || null;
+    this.clusteredRange = o.clusteredRange ?? 220;
+    this.clusteredFade = o.clusteredFade ?? 30;
+    this.mode = o.mode === 'clustered' && this.clustered ? 'clustered' : 'pool';
+    if (o.mode === 'clustered' && !this.clustered) console.warn('[NearestLights] mode \'clustered\' needs o.clustered (a ClusteredLights): using the pool');
     this.lights = [];
-    for (let i = 0; i < this.count; i++) {
-      const l = new THREE.PointLight(o.color ?? 0xffffff, 0, o.distance ?? 40, o.decay ?? 2);
-      l.visible = false; l.castShadow = false; l.name = o.name || 'pool-light';
-      this.lights.push(l);
-      if (o.parent) o.parent.add(l);
-    }
+    if (this.mode === 'pool') this._makeLights(o.distance ?? 40);
     this.reach = o.distance ?? 40;
     this.P = new Float32Array(0); this.n = 0;
     this.slot = new Int32Array(this.count).fill(-1); // candidate index per light
     this.k = new Float32Array(this.count);           // fade 0..1 per light
     this._timer = 0; this._last = new THREE.Vector3(1e9, 0, 0); this._lastDir = new THREE.Vector3(); this._on = false; this._fresh = true;
     this._best = []; this.selections = 0;
+    this._ci = -1; this.pushed = 0; this._warned = false; // clustered: intensity of the last push, lights in the cluster list
+  }
+
+  /** The pool's PointLights (created by the constructor in mode 'pool', on the first switch to it otherwise). */
+  _makeLights(distance) {
+    for (let i = 0; i < this.count; i++) {
+      const l = new THREE.PointLight(this.color, 0, distance, this.decay);
+      l.visible = false; l.castShadow = false; l.name = this.name;
+      this.lights.push(l);
+      if (this.parent) this.parent.add(l);
+    }
+  }
+
+  /**
+   * Switch between the PointLight pool and the cluster list at runtime. 'pool' empties the cluster list (count = 0)
+   * and creates the pool lights if needed; 'clustered' hides them (NUM_POINT_LIGHTS back to 0: the materials go back to
+   * their day program). Both start fresh on the next update (snap, no fade-in).
+   * @param {'pool'|'clustered'} mode @param {object} [clustered]  ClusteredLights instance (kept for later switches)
+   * @returns {'pool'|'clustered'} the mode in effect
+   */
+  setMode(mode, clustered = this.clustered) {
+    if (clustered) this.clustered = clustered;
+    if (mode === 'clustered' && !this.clustered) { console.warn('[NearestLights] setMode(\'clustered\') needs a ClusteredLights'); return this.mode; }
+    if (mode !== 'clustered' && mode !== 'pool') return this.mode;
+    if (mode === this.mode) return this.mode;
+    this.mode = mode;
+    this._on = false; this._fresh = true; this._timer = 0; this._last.set(1e9, 0, 0); this._ci = -1;
+    this.slot.fill(-1); this.k.fill(0);
+    if (mode === 'clustered') for (const l of this.lights) { l.visible = false; l.intensity = 0; }
+    else {
+      if (this.clustered) this.clustered.count = 0;
+      this.pushed = 0;
+      if (!this.lights.length) this._makeLights(this.reach);
+    }
+    return this.mode;
   }
 
   /** Candidate positions: Float32Array [x,y,z,...] or an array of [x,y,z]. */
@@ -59,6 +110,7 @@ export class NearestLights {
    * @param {number} intensity  0 = off
    */
   update(dt, view, intensity) {
+    if (this.mode === 'clustered') { this._updateClustered(view, intensity); return; }
     const on = intensity > 0 && !!view && !!view.position;
     if (on !== this._on) { this._on = on; for (const l of this.lights) l.visible = on; this.slot.fill(-1); this.k.fill(0); this._fresh = true; }
     if (!on) return;
@@ -103,5 +155,35 @@ export class NearestLights {
       this.lights[s].position.set(P[i * 3], P[i * 3 + 1] + this.yOffset, P[i * 3 + 2]);
       this.lights[s].updateMatrixWorld();
     }
+  }
+
+  /** Mode 'clustered': (re)fill the cluster list when the camera moved 4 m, the intensity or the positions changed. */
+  _updateClustered(view, intensity) {
+    const C = this.clustered;
+    const on = intensity > 0 && !!view && !!view.position;
+    if (on !== this._on) { this._on = on; this._fresh = true; if (!on) { C.count = 0; this.pushed = 0; this._ci = -1; } }
+    if (!on) return;
+    const cam = view.position;
+    if (this._fresh || intensity !== this._ci || this._last.distanceToSquared(cam) > 16) this._push(cam, intensity);
+    this._fresh = false;
+  }
+
+  /** Every candidate within clusteredRange of cam -> clustered.setLight(0..n-1), then clustered.count = n. */
+  _push(cam, intensity) {
+    this._last.copy(cam); this._ci = intensity;
+    this.selections++;
+    const C = this.clustered, P = this.P, yo = this.yOffset, R = this.clusteredRange, F = this.clusteredFade;
+    const r2 = R * R, max = C.maxLights ?? Infinity, reach = this.reach, decay = this.decay;
+    const cr = this.color.r * intensity, cg = this.color.g * intensity, cb = this.color.b * intensity;
+    let m = 0;
+    for (let i = 0; i < this.n; i++) {
+      const x = P[i * 3], y = P[i * 3 + 1] + yo, z = P[i * 3 + 2];
+      const d2 = (x - cam.x) ** 2 + (y - cam.y) ** 2 + (z - cam.z) ** 2;
+      if (d2 > r2) continue;
+      if (m >= max) { if (!this._warned) { this._warned = true; console.warn(`[NearestLights] more than ${max} lights within ${R} m: the rest are skipped`); } break; }
+      const k = F > 0 ? Math.min(1, (R - Math.sqrt(d2)) / F) : 1;
+      C.setLight(m++, x, y, z, reach, cr * k, cg * k, cb * k, decay);
+    }
+    C.count = m; this.pushed = m;
   }
 }

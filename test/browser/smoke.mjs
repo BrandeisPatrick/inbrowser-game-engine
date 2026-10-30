@@ -5,9 +5,11 @@
 // may still adapt), and info() is recorded. Every page step runs under a 90 s watchdog; a page that reloads after it
 // was ready is waited out and the pose redone once. A page without a harness yet (it loads and sets a legacy global
 // such as window.__canyon) or without a page on this server is SKIPPED, not failed. On macOS a SwiftShader renderer
-// (no GPU) fails. Exit code 1 on any failure.
+// (no GPU) fails. Exit code 1 on any failure. `city-clustered` is the city page again, at night with every lamp in
+// range lit through ClusteredLights (one pose, plus in-page checks: cluster lights in view, no failed program, no
+// black frame), so a GLSL error in the clustered chunks shows up here.
 //
-//   node test/browser/smoke.mjs                        # canyon-run, city, character
+//   node test/browser/smoke.mjs                        # canyon-run, city, character, sandbox, city-clustered
 //   node test/browser/smoke.mjs city --headed --size=1600x900 [--config=other.vite.config.js]
 import {
   defaultSize, repoRoot, legacyGlobals, readyTimeoutMs, parseArgs, parseSize, startVite, resolvePage, launchChrome,
@@ -15,11 +17,31 @@ import {
 } from './playwright.config.mjs';
 
 // extra query per page: the city without traffic or tile streaming (async tile builds could land between captures)
-const PAGE_QUERY = { city: 'notraffic&nostream=1', sandbox: 'scene=stack' };
+const PAGE_QUERY = { city: 'notraffic&nostream=1', sandbox: 'scene=stack', 'city-clustered': 'notraffic&nostream=1&clustered&t=night' };
+// pages that are another page with a different query, and the poses they run (default: all)
+const PAGE_PATH = { 'city-clustered': 'city' };
+const PAGE_POSES = { 'city-clustered': ['street'] };
+// in-page checks after each pose: a failure message or ''
+const PAGE_CHECK = {
+  'city-clustered': () => {
+    const C = window.__city, w = C && C.world, cl = w && w.clustered;
+    if (!cl) return 'world.clustered missing (fell back to the PointLight pool)';
+    if (w.props.lightPool.mode !== 'clustered') return `lamp mode ${w.props.lightPool.mode}`;
+    if (!(w.atmo.darkness > 0.3)) return `not night (darkness ${w.atmo.darkness})`;
+    if (!(cl.count > 0 && cl.stats.lights > 0)) return `no cluster lights (count ${cl.count}, in view ${cl.stats.lights})`;
+    const bad = C.engine.renderer.info.programs.filter((p) => p.diagnostics && !p.diagnostics.runnable).length;
+    if (bad) return `${bad} program(s) failed to compile`;
+    const cap = window.__sample.capture(4);
+    let sum = 0;
+    for (let i = 0; i < cap.data.length; i += 4) sum += Math.max(cap.data[i], cap.data[i + 1], cap.data[i + 2]);
+    const mean = sum / (cap.data.length / 4) / (cap.scale * cap.scale);
+    return mean < 1 ? `black frame (mean brightest channel ${mean.toFixed(2)} / 255)` : '';
+  },
+};
 const STEP_MS = 90000;
 
 const args = parseArgs();
-const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox'];
+const pages = args._.length ? args._ : args.pages ? String(args.pages).split(',') : ['canyon-run', 'city', 'character', 'sandbox', 'city-clustered'];
 const size = parseSize(args.size || defaultSize);
 const headless = !args.headed;
 const mac = process.platform === 'darwin';
@@ -44,7 +66,7 @@ try {
   const context = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: 1 });
 
   for (const id of pages) {
-    const path = await resolvePage(vite, id);
+    const path = await resolvePage(vite, PAGE_PATH[id] || id);
     if (!path) { pageRows.push({ page: id, path: '-', status: 'SKIPPED', load_s: null, poses: 0, renderer: '', note: 'no such page on this server' }); continue; }
     const page = await context.newPage();
     const errors = watchErrors(page);
@@ -56,7 +78,7 @@ try {
     const step = (fn, arg, what) => evalStep(page, errors, s, fn, arg, { ms: STEP_MS, what: `${id} ${what}` });
     try {
       if (s.status === 'ready') {
-        const ids = await step(() => window.__sample.poses.slice(), undefined, 'poses');
+        const ids = (await step(() => window.__sample.poses.slice(), undefined, 'poses')).filter((p) => !PAGE_POSES[id] || PAGE_POSES[id].includes(p));
         row.poses = ids.length;
         if (!ids.length) {
           const info = await step(() => window.__sample.info(), undefined, 'info');
@@ -80,6 +102,7 @@ try {
               Object.assign(pr, { hash, stable: s.reloads !== reloads ? `${stable} (reloaded)` : stable, draws: info.drawCalls, tris: info.triangles, size: fmtSize(info.size) });
               row.renderer = info.renderer;
               if (!ok) failures.push(`${id}/${pose}: captures differ (${stable})`);
+              if (PAGE_CHECK[id]) { const msg = await step(PAGE_CHECK[id], undefined, `check ${pose}`); if (msg) failures.push(`${id}/${pose}: ${msg}`); }
               break;
             }
           } catch (e) {

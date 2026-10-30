@@ -22,6 +22,10 @@ const world = new MapWorld({
   traffic: params.has('notraffic') ? false : { count: +(params.get('traffic') || 150) },
   streaming: params.has('nostream') ? false : undefined,
   physics: true,
+  // 0.7.0 knobs: ?clustered[&range=220] (every lamp in range lights the scene through ClusteredLights), ?cascades=2|3|4,
+  // ?shadows=pcf|fast|pcss; the default path is untouched when the params are absent
+  lights: params.has('clustered') ? { clustered: true, clusteredRange: +params.get('range') || 220 } : undefined,
+  ...(params.has('cascades') || params.has('shadows') ? { atmosphere: { shadows: { ...(params.has('cascades') ? { cascades: +params.get('cascades') || 2 } : {}), ...(params.has('shadows') ? { kernel: params.get('shadows') } : {}) } } } : {}),
 });
 engine.addSystem(world.system({ camera }), 'world');
 const t0 = performance.now();
@@ -32,11 +36,11 @@ let postfx = null;
 if (!NOFX) {
   try {
     const { width, height } = engine.size;
-    postfx = new PostFX(renderer, scene, camera, { atmosphere: world.atmo, width, height, pixelRatio: engine.pixelRatio });
+    postfx = new PostFX(renderer, scene, camera, { atmosphere: world.atmo, width, height, pixelRatio: engine.pixelRatio, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto' });
   } catch (e) { console.warn('[city] post-processing unavailable', e); world.atmo.setFogMode('scene'); }
 }
 engine.renderFn = (sc, cam, dt) => { if (postfx) postfx.render(dt); else { renderer.render(sc, cam); world.atmo.renderFlare(renderer, cam); } };
-engine.onResize = (w, h, pr) => { if (postfx) postfx.setSize(w, h, pr); };
+engine.onResize = (w, h, pr) => { if (postfx) postfx.setSize(w, h, pr); world.setSize(w, h, pr); };
 
 // free-fly camera from the spawn, looking along the spawn heading (heading 0 = -Z, positive = left)
 const sp = world.getSpawn();
@@ -66,13 +70,18 @@ const sample = createBenchHarness(engine, {
     const su = world.atmo.sky.material.uniforms; su.uTime.value = 0; su.uCloudOffset.value.set(0.13, 0.41);
     world.time = 0; if (world.mat && world.mat.water && world.mat.water.userData.u) world.mat.water.userData.u.uTime.value = 0;
   },
-  quiet: () => { rig.deactivate(); if (postfx) { postfx.autoExposure = false; postfx.setTimeOfDay(world.atmo.darkness); } },
-  settings: {
-    'postfx.enabled': (v) => { if (postfx) postfx.setEnabled(!!v); },
-    'postfx.aa': (v) => { if (postfx) postfx.setMSAA(v === 'fxaa' ? 0 : v === 'msaa' ? 4 : 'auto', v === 'msaa' ? Infinity : MSAA0); },
-    'postfx.ao': (v) => { if (postfx) postfx.aoPass.enabled = !!v; },
-    'shadows.kernel': (v) => world.atmo.setShadowKernel(v),
-    'time': (v) => { world.atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(world.atmo.darkness); },
+  quiet: () => {
+    rig.deactivate(); if (postfx) { postfx.autoExposure = false; postfx.setTimeOfDay(world.atmo.darkness); }
+    if (postfx && postfx.history) { postfx.history.reset(); for (let i = 0; i < 32; i++) postfx.render(0); } // TAA: converge from a clean history
+  },
+  settings: { // get + set so __sample.run() restores every knob between settings (not cumulative)
+    'postfx.enabled': { get: () => !!(postfx && postfx.enabled), set: (v) => { if (postfx) postfx.setEnabled(!!v); } },
+    'postfx.aa': { get: () => (postfx ? postfx.aa : null), set: (v) => { if (postfx) postfx.set('aa', v); } },
+    'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
+    'lights.mode': { get: () => (world.props && world.props.lightPool ? world.props.lightPool.mode : null), set: (v) => world.setLightMode(v) },
+    'postfx.ao': { get: () => !!(postfx && postfx.aoPass.enabled), set: (v) => { if (postfx) postfx.aoPass.enabled = !!v; } },
+    'shadows.kernel': { get: () => world.atmo.shadowKernel, set: (v) => world.atmo.setShadowKernel(v) },
+    'time': { get: () => world.atmo.timeOfDay, set: (v) => { world.atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(world.atmo.darkness); } },
   },
 });
 const bp = readBenchParams(location.search); if (bp.size) sample.resize(bp.size.w, bp.size.h);
@@ -81,4 +90,5 @@ renderer.compile(scene, camera);
 window.__city = { THREE, engine, world, postfx, atmo: world.atmo, rig, input, loadMs, place, stats: world.stats };
 console.info(`[city] ready in ${loadMs} ms`, world.stats);
 engine.start();
+if (bp.enabled) sample.freeze(); // ?bench=1: no live ticks before the first pose, so captures reproduce across loads
 loading.hide(300);

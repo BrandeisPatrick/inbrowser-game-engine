@@ -44,10 +44,97 @@ engine.start();
 - `engine.profiler.frame` gives per-system CPU ms and per-pass GPU ms (when `EXT_disjoint_timer_query_webgl2` exists).
 
 ## Lighting
-- Atmosphere: physically based sky, sun disc + lensflare, procedural cloud layer, height fog, time of day (hours or presets), moon/stars; PMREM environment refreshed on time change; emissive scaling by darkness.
-- Shadows: camera-following cascaded shadow maps (near sharp / far soft), texel snapping to stop shimmer, per-material bias presets.
-- Post: GTAO (half-res + denoise), bloom (threshold per time of day), SMAA, filmic grade, vignette, optional height fog pass. Everything resolution-aware.
-- Local lights: nearest-N real point lights + emissive/fake light pools for the rest; headlight cones.
+- Atmosphere: physically based sky, sun disc + lensflare, procedural cloud layer, height fog, time of day (hours or
+  presets), moon/stars; PMREM environment refreshed on time change; emissive scaling by darkness.
+- Shadows: camera-following cascaded shadow maps (2 by default, up to 4: `shadows.cascades`), texel snapping to
+  stop shimmer, per-light bias; kernels `'pcf'` (three's), `'fast'` (5 hardware-compare taps) and `'pcss'`
+  (blocker search + contact-hardening penumbra), switchable at runtime (`atmo.setShadowKernel`).
+- Post: GTAO (half-res + denoise), bloom (threshold per time of day), FXAA or 4x MSAA by day (forward path) or TAA
+  over the G-buffer path (0.7.0), filmic grade, vignette, height fog pass. Everything resolution-aware.
+- Local lights: `NearestLights` pool of 8 real point lights + emissive pools for the rest, or (0.7.0) every lamp in
+  range through `ClusteredLights` (`lights: { clustered: true }`); headlight cones stay additive sprites.
+
+## Render pipeline (0.7.0): G-buffer, TAA, clustered lights, cascades, GPU particles
+Two paths, chosen per `PostFX` instance; the forward path is the default and renders bit-identically to 0.6.0.
+- **Forward** (`gbuffer: false`): ScenePass (4x MSAA HDR R11G11B10F + depth) -> Exposure -> AO -> Bloom -> Final
+  (FXAA when MSAA is off: above `msaaMaxPixels` or by night).
+- **G-buffer** (`gbuffer: true`): the scene pass renders into a 3-attachment MRT target (`render/GBuffer.js`:
+  colour R11G11B10F, normal RGBA8 = octahedral view-space normal + roughness + metalness nibble / flags, velocity
+  RG16F in UV units) with `samples: 0` (MSAA + MRT would resolve every attachment and depth per attachment), then
+  Exposure -> AO -> **TAA** (`passes/TAAPass.js`: 5-tap Catmull-Rom history, YCoCg variance clip, velocity
+  reprojection for objects that wrote one, depth reprojection otherwise, blend 0 on disocclusion / off-screen /
+  noHistory) -> Bloom -> Final, with Bloom and Final reading `postfx.colorSource`. `aa: 'auto' | 'msaa' | 'fxaa' |
+  'taa'` ('auto' = today's rule forward, TAA with the G-buffer); `CameraHistory` jitters the projection (Halton
+  16) and publishes the unjittered / previous view-projection to every pass and to the G-buffer uniforms.
+- **Writing the G-buffer** is a global chunk patch under the per-material define `ENGINE_GBUFFER` (the
+  `shadowKernel.js` pattern): declarations in `clipping_planes_pars_fragment`, captures in `normal_fragment_maps` /
+  `roughnessmap_fragment` / `metalnessmap_fragment`, the writes in `dithering_fragment`, the velocity varyings via a
+  `project_vertex` tail. Materials that replace those chunks append the exported tails (vegetation, impostors,
+  water, buildings do). Blended / unlit / non-mesh materials write zeros to the extra outputs (`ENGINE_GBUFFER_ZERO`;
+  on ANGLE/Metal that is faster than narrowing the draw buffers, which ends the render pass); an `autoSync` hook
+  classifies materials on their first draw so nothing disappears from the MRT target. Velocity sources: instanced
+  objects through `InstancedPool({ velocity: true })` (previous-matrix attribute), moving meshes through
+  `postfx.track(mesh)` (a unique material + previous model-view uniform; `postfx.trackPool(pool)` for pools), both
+  kept by PostFX and replayed whenever the G-buffer is rebuilt, everything else camera-only; skinned meshes get
+  model-matrix velocity.
+- **Clustered lights** (`render/ClusteredLights.js`): a CPU froxel grid (16 x 9 x 24 exponential slices) assigns
+  up to 1024 point / spot lights to cells, uploaded as one RGBA32F light texture and one RGBA32UI cells + index
+  texture (+2 texture units); a global `lights_pars_begin` / `lights_fragment_begin` patch under `ENGINE_CLUSTERED`
+  loops over the fragment's cell and calls three's `RE_Direct` with the stock attenuation, so 8 clustered lights
+  render pixel-identically to 8 real `PointLight`s. No shadows on clustered lights (real three lights keep theirs).
+  The world layer's `NearestLights({ mode: 'clustered' })` pushes every lamp within `clusteredRange`.
+- **Cascades and PCSS** (`shadowCascade.js`, `shadowKernel.js`, `Atmosphere`): `shadows.cascades` 1-4 (middle
+  cascades `sunMid` / `sunMid2` between the near `sun` and the far `sunFar`, round-robin map updates), `kernel:
+  'pcss'` (8-tap blocker search on the packed map, penumbra from receiver - blocker, 12-tap rotated compare disc),
+  `atmo.shadowCascadeInfo(out)` for later passes (volumetrics in 0.8.0).
+- **GPU particles** (`render/GpuParticles.js`): the `ParticleSystem` API (same `spawn` / `emit` / `update`) over
+  `GPUComputationRenderer` ping-pong textures, 65k particles, deterministic slot assignment, optional depth-buffer
+  collision; Canyon Run's dust devils move to it in 0.8.0.
+
+### Measured (0.7.0, Apple M4, the app's Chromium, `bench/results/2026-10-29-125*-*-p3-*.json`)
+Same-page A/B through `run(plan)`, 24 GPU-synchronised frames per cell after 3 warm-up frames; cross-load diffs
+(cascades) against a fresh load of the default page. Canyon Run poses straight / chase / aerial / ahead. The sample
+caps MSAA at 4 Mpx, so the default is FXAA at 3024x1964 and 4x MSAA at 2560x1440: that is why the G-buffer path,
+which cannot use MSAA, is *cheaper* than the default at the smaller size (the Apple-GPU MSAA resolve costs more
+than the extra attachments) and dearer at the larger one.
+
+| setting (3024x1964) | ms | pixel change vs default (mean of 0..255) |
+|---|---|---|
+| forward, FXAA, 'fast' shadows, 2 cascades (default) | 8.25 / 8.62 / 8.80 / 5.60 | — |
+| G-buffer + FXAA | 8.54 / 8.94 / 9.25 / 5.78 | 0 (colour attachment identical) |
+| G-buffer + TAA (defaults) | 10.65 / 11.09 / 11.38 / 7.83 | 0.31-0.36 (edges; 2.4-2.6 % of pixels > 2) |
+| kernel 'pcf' (three's 17 taps) | 9.91 / 10.67 / 10.90 / 6.51 | 0.002-0.012 |
+| kernel 'pcss' | 9.12 / 9.58 / 10.51 / 6.15 | 0.002-0.018 (contact-hardening penumbrae) |
+| 3 cascades ('fast') | 8.45 / 8.93 / 9.25 / 5.75 | 0.004 / 0.007 / 0.003 / 0.014 |
+| 4 cascades ('fast') | 8.58 / 9.07 / 9.69 / 5.85 | 0.004 / 0.009 / 0.006 / 0.017 |
+
+| setting (2560x1440) | ms | pixel change vs default |
+|---|---|---|
+| forward, 4x MSAA (default) | 7.54 / 7.55 / 8.69 / 5.27 | — |
+| G-buffer + FXAA | 6.00 / 6.37 / 6.98 / 4.09 | 0.32-0.39 (FXAA vs MSAA) |
+| G-buffer + TAA | 7.33 / 7.73 / 8.27 / 5.46 | 0.22-0.31 |
+| kernel 'pcf' / 'pcss' | 8.41 / 9.02 / 10.45 / 6.05 and 7.58 / 8.00 / 9.27 / 5.42 | 0.002-0.011 / 0.002-0.020 |
+| 3 / 4 cascades | 7.37 / 7.74 / 8.96 / 5.30 and 7.42 / 7.79 / 9.41 / 5.41 | 0.003-0.012 / 0.005-0.014 |
+
+The TAA pass costs 2.1-2.3 ms at 3024x1964 over G-buffer + FXAA and is bound by full-screen texture reads
+(RGBA16F history in and out, colour 3x3, depth, velocity, flags), not arithmetic. Measured knobs (`taa.*`, all
+off by default, `p3-taa-variants.json`): `reject: 'early'` ±0.0 ms (0.001-0.003 mean), `snap` -0.15 ms on static
+poses (≤ 0.003), `velocityFirst` 0 on static poses (velocity is 0 there), `reject: 'single'` -0.05 ms
+(≤ 0.005), `stableDepth: true` +0.13 ms (0.005), `filter: 'bilinear'` -0.25 ms, `historyFormat: 'r11g11b10'`
+-0.58 ms but a 0.38-0.68 mean fixed bias (the 10 % per-frame update is below its mantissa), so RGBA16F stays.
+
+City at night (`?clustered&t=night`, 698 lamps in the map; 27 within 220 m of the `high` pose, 15 of them in the
+frustum's clusters), poses street / crossing / high: 8-light pool 11.12 / 11.46 / 11.29 ms, every lamp clustered 11.69 / 12.43 / 11.28
+(0.97-2.27 mean: the whole street is lit), clustered + G-buffer + TAA 14.70 / 15.49 / 14.80; at 2560x1440 (MSAA
+default) 8.26 / 8.18 / 8.02, 8.23 / 8.83 / 7.94 and 10.13 / 10.82 / 10.06. Character (idle / run / aerial):
+forward 5.45 / 5.03 / 4.70 at 3024x1964, G-buffer + FXAA 5.02 / 5.19 / 4.70 (identical), G-buffer + TAA 7.09 /
+7.28 / 6.86; at 2560x1440 4.95 / 4.72 / 4.44 (MSAA), 3.50 / 3.69 / 3.26 and 4.84 / 4.92 / 4.71. Sandbox stack
+(overview / close, `?gbuffer=1` so the body pools carry per-instance velocity): 5.21 / 5.52, 4.87 / 5.30
+(identical), 6.98 / 7.38 at 3024x1964; 4.61 / 5.18 (MSAA), 3.32 / 3.68, 4.62 / 4.97 at 2560x1440. GPU particles:
+65k live with 4096 spawns per frame cost 0.2 ms of CPU in headless Chrome (author's measurement; the Canyon Run
+devils switch in 0.8.0). TAA captures are not bit-stable across frames by construction (0.3 % of pixels move
+> 2 / 255 per frame), so TAA gates use `meanAbs` on converged frames (`quiet` resets the history and renders 32
+frames).
 
 ## Physics
 Two cooperating worlds, both pure JS, deterministic and Node-safe (`npm test` runs them headless):
@@ -711,9 +798,15 @@ What makes a capture reproducible across page loads (learned on 0.5.0 while movi
   of Canyon Run's pixels by up to 190 / 255);
 - LOD partitions have hysteresis and throttles: run the poses in a fixed order from a fresh page load (the smoke
   script does), or force the partitions (the city harness calls `world.update(1, …)` three times);
-- freeze auto-exposure (`postfx.autoExposure = false; postfx.setTimeOfDay(darkness)`) and clear particles.
+- freeze auto-exposure (`postfx.autoExposure = false; postfx.setTimeOfDay(darkness)`) and clear particles;
+- (0.7.0) stop the loop at `setReady()` under `?bench=1` (`harness.freeze()`; every sample does): `pose()` only
+  freezes the loop when it is called, so the live ticks between page load and the first pose (the car settling on
+  its suspension, animation clocks) made Canyon Run's car poses differ by up to 0.28 mean across loads;
+- (0.7.0) give every harness setting a getter (`{ get, set }`): `run(plan)` restores each knob to the value the
+  getter returned before the first setting, so a plain setter without a getter makes the plan cumulative (the
+  0.7.0 'pcf' / 'pcss' rows were first measured with TAA still on from the previous row).
 With that, every pose of Canyon Run, the city, the character and the sandbox hashes identically across reloads in
-the desktop app's browser (0.6.0: two fresh loads diff to exactly 0 on every pose). Headless Chrome under Playwright
+the desktop app's browser (0.7.0: two fresh loads of Canyon Run diff to exactly 0 on every pose). Headless Chrome under Playwright
 reproduces most poses but not all: Canyon Run's `straight` and `ahead` hashes drift between smoke runs while
 `chase` / `aerial` and every city / character / sandbox pose stay equal, so cross-phase pixel gates are read in the
 app's browser (or as same-page A/B through `run(plan)`), and the smoke's job is boot + stability within a load. `npm run smoke` asserts two equal captures per pose

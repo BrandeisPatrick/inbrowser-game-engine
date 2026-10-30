@@ -15,9 +15,10 @@
 // cannot start, and dyn.mode (not the URL) decides the interpolation, the HUD and the bench behaviour.
 // Query: ?scene=stack|joints|chain|ragdoll|car|bench1000 (default stack), ?bodies=N (bench1000), ?solid=0 (car: the
 // crates are not colliders for the vehicle controller, only the kinematic box pushes them), ?worker=1,
-// ?debug=1, ?substeps=N (4), ?hz=N, ?seed=N, ?t=<preset|hours>, ?nofx=1, ?fps=60, ?profile=N,
-// ?bench=1&size=WxH (window.__sample: poses overview / close of the current scene; settings physics.debug and,
-// in-thread, physics.substeps). window.__sandbox = { engine, dyn, physics, scene (the current one), pools, dbg, spawn, reset, ... }.
+// ?debug=1, ?substeps=N (4), ?hz=N, ?seed=N, ?t=<preset|hours>, ?nofx=1, ?fps=60, ?profile=N, ?gbuffer=1 (MRT scene
+// pass + per-instance velocity for the body pools), ?aa=auto|msaa|fxaa|taa, ?cascades=2|3|4, ?shadows=fast|pcf|pcss,
+// ?bench=1&size=WxH (window.__sample: poses overview / close of the current scene; settings physics.debug,
+// postfx.aa, postfx.gbuffer and, in-thread, physics.substeps). window.__sandbox = { engine, dyn, physics, scene (the current one), pools, dbg, spawn, reset, ... }.
 // Invariant: every scene build (first load, R, a bench pose) ends with present(): the instance pools, the scene's
 // per-frame visuals, the debug lines and the HUD are filled from the current physics state, so the next rendered
 // frame shows the bodies even when no engine tick runs in between (the bench harness freezes the loop).
@@ -41,6 +42,8 @@ import { HUD, ACCENT, applyTheme } from './hud.js';
 const params = new URLSearchParams(location.search);
 const flag = (k) => params.has(k) && params.get(k) !== '0';
 const NOFX = flag('nofx');
+// 0.7.0 knobs: ?gbuffer=1 (MRT scene pass, instanced-pool velocity, TAA), ?aa=auto|msaa|fxaa|taa, ?cascades=2|3|4, ?shadows=fast|pcf|pcss
+const GBUFFER = flag('gbuffer');
 // drawing-buffer pixels above which the post stack uses FXAA instead of 4x MSAA (as in Canyon Run): ?msaamax=N
 const MSAA_MAX = params.has('msaamax') ? (params.get('msaamax') === '' ? Infinity : +params.get('msaamax') || 0) : 4e6;
 const SCENE_IDS = Object.keys(SCENES);
@@ -126,7 +129,7 @@ async function boot() {
   const t = params.get('t');
   const atmo = new Atmosphere({
     scene, renderer, camera, timeOfDay: t == null ? 'afternoon' : Number.isFinite(+t) ? +t : t,
-    shadows: { cascades: 2, near: 24, far: [120, 240, 420], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 40,
+    shadows: { cascades: +params.get('cascades') || 2, near: 24, far: [120, 240, 420], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 40,
   });
 
   // ---------------------------------------------------------------- static world first (a worker client copies it)
@@ -154,7 +157,7 @@ async function boot() {
   if (WORKER && !WORKER_ON) console.warn('[sandbox] ?worker=1 but the dynamics worker did not start: running in-thread');
   // the car / rigs / controllers see the bodies as 'rigid' boxes, except the car's own kinematic proxy
   attachToPhysicsWorld(dyn, physics, { mask: ~PROXY_LAYER });
-  const pools = new BodyPools(scene, dyn, { interpolate: !WORKER_ON, fixedDt: engine.fixedDt, textures: { box: boxTexture(renderer), round: roundTexture(renderer) } });
+  const pools = new BodyPools(scene, dyn, { interpolate: !WORKER_ON, fixedDt: engine.fixedDt, velocity: GBUFFER, textures: { box: boxTexture(renderer), round: roundTexture(renderer) } });
   const dbg = new PhysicsDebug(dyn, { maxLines: Math.max(65536, 48 * BODIES) });
   dbg.enabled = DEBUG;
   scene.add(dbg);
@@ -276,7 +279,10 @@ async function boot() {
   if (!NOFX) {
     try {
       const { width, height } = engine.size;
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8 }, msaaMaxPixels: MSAA_MAX });
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8 }, msaaMaxPixels: MSAA_MAX, gbuffer: GBUFFER, aa: params.get('aa') || 'auto' });
+      // bodies move: per-instance velocity from the pools (InstancedPool({ velocity }) when ?gbuffer=1), replayed whenever the G-buffer is built
+      for (const b of pools.buckets) postfx.trackPool(b.pool);
+      pools.onBucket = (pool) => postfx.trackPool(pool);
     } catch (e) { console.warn('[sandbox] post-processing unavailable', e); atmo.setFogMode('scene'); }
   }
   engine.renderFn = (sc, cam, dt) => {
@@ -318,7 +324,11 @@ async function boot() {
   engine.addSystem({ lateUpdate: (dt) => hud.update(dt, readHud()) }, 'hud');
 
   // ---------------------------------------------------------------- bench harness (window.__sample)
-  const settings = { 'physics.debug': { get: () => !!dbg.enabled, set: (v) => setDebug(v) } };
+  const settings = {
+    'physics.debug': { get: () => !!dbg.enabled, set: (v) => setDebug(v) },
+    'postfx.aa': { get: () => (postfx ? postfx.aa : null), set: (v) => { if (postfx) postfx.set('aa', v); } },
+    'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
+  };
   // substeps are a field of the in-thread world; a worker's world got them at construction (no knob then)
   if (dyn.world) settings['physics.substeps'] = { get: () => dyn.world.substeps, set: (v) => { dyn.world.substeps = Math.max(1, Math.min(64, v | 0)); } };
   const harness = createBenchHarness(engine, {
@@ -328,6 +338,7 @@ async function boot() {
     quiet() {
       if (postfx) { postfx.autoExposure = false; postfx.setTimeOfDay(atmo.darkness); }
       const su = atmo.sky.material.uniforms; su.uTime.value = 0; su.uCloudOffset.value.set(0.13, 0.41); // pin the sky (stars, clouds)
+      if (postfx && postfx.history) { postfx.history.reset(); for (let i = 0; i < 32; i++) postfx.render(0); } // TAA: converge from a clean history
     },
     settings,
   });
@@ -344,6 +355,7 @@ async function boot() {
   engine.start();
   loading.hide(400);
   harness.setReady();
+  if (bp.enabled) harness.freeze(); // ?bench=1: no live ticks before the first pose, so captures reproduce across loads
 }
 
 boot().catch((err) => {

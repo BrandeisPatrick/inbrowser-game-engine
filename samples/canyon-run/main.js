@@ -83,7 +83,7 @@ async function boot() {
     scene, renderer, camera, sun: DESERT_SUN, looks: DESERT_LOOKS, timePresets: DESERT_PRESETS,
     timeOfDay: t == null ? 'noon' : Number.isFinite(+t) ? +t : t,
     // ?shadows=pcf: three's 17-tap kernel; 'fast' (5 hardware-compare taps) measured -2 ms at 3024x1964, pixel-equivalent
-    shadows: { cascades: 2, near: 42, far: [250, 420, 650], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 170, cloudWind: [9, 3],
+    shadows: { cascades: +params.get('cascades') || 2, near: 42, far: [250, 420, 650], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 170, cloudWind: [9, 3],
   });
 
   // ---------------------------------------------------------------- world build (one loading system)
@@ -142,7 +142,9 @@ async function boot() {
   if (!NOFX) {
     try {
       const { width, height } = engine.size;
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, grade: DESERT_GRADE, ao: { radius: 1.6, thickness: 1.4, samples: 8 }, msaaMaxPixels: MSAA_MAX });
+      // 0.7.0 knobs: ?gbuffer=1 (MRT scene pass: normals + velocity, TAA), ?aa=auto|msaa|fxaa|taa, ?cascades=2|3|4
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, grade: DESERT_GRADE, ao: { radius: 1.6, thickness: 1.4, samples: 8 }, msaaMaxPixels: MSAA_MAX, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto' });
+      buggy.object3d.traverse((o) => { if (o.isMesh) postfx.track(o); }); // the car moves: per-object velocity (replayed whenever the G-buffer is built)
     } catch (e) { console.warn('[canyon-run] post-processing unavailable', e); atmo.setFogMode('scene'); }
   }
   engine.renderFn = (sc, cam, dt) => {
@@ -313,19 +315,22 @@ async function boot() {
       for (const k in rigs) rigs[k].deactivate();
       devils.ps.clear(); devils.timer = 1e9; for (const d of devils.devils) d.on = false; buggy.dust.clear();
       if (postfx) { postfx.autoExposure = false; postfx.setTimeOfDay(atmo.darkness); }
+      if (postfx && postfx.history) { postfx.history.reset(); for (let i = 0; i < 32; i++) postfx.render(0); } // TAA: converge from a clean history
     },
-    settings: {
-      'postfx.enabled': (v) => { if (postfx) postfx.setEnabled(!!v); },
-      'postfx.aa': (v) => { if (postfx) postfx.setMSAA(v === 'fxaa' ? 0 : v === 'msaa' ? 4 : 'auto', v === 'msaa' ? Infinity : MSAA_MAX); },
-      'postfx.ao': (v) => { if (postfx) postfx.aoPass.enabled = !!v; },
-      'postfx.bloom': (v) => { if (postfx) postfx.bloomPass.enabled = !!v; },
-      'shadows.kernel': (v) => atmo.setShadowKernel(v),
-      'time': (v) => { atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(atmo.darkness); },
+    settings: { // get + set so __sample.run() restores every knob between settings (not cumulative)
+      'postfx.enabled': { get: () => !!(postfx && postfx.enabled), set: (v) => { if (postfx) postfx.setEnabled(!!v); } },
+      'postfx.aa': { get: () => (postfx ? postfx.aa : null), set: (v) => { if (postfx) postfx.set('aa', v); } },
+      'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
+      'postfx.ao': { get: () => !!(postfx && postfx.aoPass.enabled), set: (v) => { if (postfx) postfx.aoPass.enabled = !!v; } },
+      'postfx.bloom': { get: () => !!(postfx && postfx.bloomPass.enabled), set: (v) => { if (postfx) postfx.bloomPass.enabled = !!v; } },
+      'shadows.kernel': { get: () => atmo.shadowKernel, set: (v) => atmo.setShadowKernel(v) },
+      'time': { get: () => atmo.timeOfDay, set: (v) => { atmo.setTimeOfDay(v); if (postfx) postfx.setTimeOfDay(atmo.darkness); } },
     },
   });
   const bp = readBenchParams(location.search); if (bp.size) sample.resize(bp.size.w, bp.size.h);
   sample.setReady();
   engine.start();
+  if (bp.enabled) sample.freeze(); // ?bench=1: no live ticks before the first pose, so captures reproduce across loads
   loading.hide(450);
 }
 

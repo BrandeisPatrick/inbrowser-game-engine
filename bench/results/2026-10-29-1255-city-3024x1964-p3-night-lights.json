@@ -1,0 +1,182 @@
+{
+  "page": "city",
+  "label": "p3-night-lights",
+  "date": "2026-10-29T16:55:36.942Z",
+  "url": "http://localhost:5190/city/?notraffic&nostream=1&clustered&t=night&bench=1&size=3024x1964",
+  "browser": "claude-desktop-app in-app Chromium",
+  "chrome": "152.0.7977.167",
+  "headless": false,
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+  "size": {
+    "w": 3024,
+    "h": 1964,
+    "pixelRatio": 1
+  },
+  "frames": 24,
+  "warmup": 3,
+  "runMs": 6862,
+  "reloads": 0,
+  "poses": [
+    "street",
+    "crossing",
+    "high"
+  ],
+  "settings": [
+    {
+      "label": "pool",
+      "set": {
+        "lights.mode": "pool"
+      }
+    },
+    {
+      "label": "clustered",
+      "set": {
+        "lights.mode": "clustered"
+      }
+    },
+    {
+      "label": "clustered-gbuffer-taa",
+      "set": {
+        "lights.mode": "clustered",
+        "postfx.gbuffer": true,
+        "postfx.aa": "taa"
+      }
+    }
+  ],
+  "errors": [],
+  "rows": [
+    {
+      "setting": "pool",
+      "pose": "street",
+      "ms": 11.121,
+      "fps": 89.92,
+      "hash": "7382a4af",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 124,
+      "triangles": 815219
+    },
+    {
+      "setting": "pool",
+      "pose": "crossing",
+      "ms": 11.458,
+      "fps": 87.27,
+      "hash": "1b633f7f",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 115,
+      "triangles": 815327
+    },
+    {
+      "setting": "pool",
+      "pose": "high",
+      "ms": 11.292,
+      "fps": 88.56,
+      "hash": "8a12bd3e",
+      "meanAbs": null,
+      "p99": null,
+      "max": null,
+      "pctOver2": null,
+      "pctOver8": null,
+      "drawCalls": 122,
+      "triangles": 828237
+    },
+    {
+      "setting": "clustered",
+      "pose": "street",
+      "ms": 11.692,
+      "fps": 85.53,
+      "hash": "90e7b4ef",
+      "meanAbs": 2.1122,
+      "p99": 59.438,
+      "max": 198.583,
+      "pctOver2": 10.502,
+      "pctOver8": 4.421,
+      "drawCalls": 124,
+      "triangles": 815219
+    },
+    {
+      "setting": "clustered",
+      "pose": "crossing",
+      "ms": 12.433,
+      "fps": 80.43,
+      "hash": "3a189240",
+      "meanAbs": 0.9689,
+      "p99": 28.896,
+      "max": 199.729,
+      "pctOver2": 4.325,
+      "pctOver8": 2.204,
+      "drawCalls": 115,
+      "triangles": 815327
+    },
+    {
+      "setting": "clustered",
+      "pose": "high",
+      "ms": 11.283,
+      "fps": 88.63,
+      "hash": "5b73e1d4",
+      "meanAbs": 2.2695,
+      "p99": 64.833,
+      "max": 184.729,
+      "pctOver2": 8.688,
+      "pctOver8": 4.916,
+      "drawCalls": 122,
+      "triangles": 828237
+    },
+    {
+      "setting": "clustered-gbuffer-taa",
+      "pose": "street",
+      "ms": 14.696,
+      "fps": 68.05,
+      "hash": "9a7a20fb",
+      "meanAbs": 3.2319,
+      "p99": 56.458,
+      "max": 199.896,
+      "pctOver2": 24.646,
+      "pctOver8": 7.18,
+      "drawCalls": 125,
+      "triangles": 815220
+    },
+    {
+      "setting": "clustered-gbuffer-taa",
+      "pose": "crossing",
+      "ms": 15.492,
+      "fps": 64.55,
+      "hash": "c899e769",
+      "meanAbs": 2.5546,
+      "p99": 31.625,
+      "max": 196.229,
+      "pctOver2": 24.033,
+      "pctOver8": 5.722,
+      "drawCalls": 116,
+      "triangles": 815328
+    },
+    {
+      "setting": "clustered-gbuffer-taa",
+      "pose": "high",
+      "ms": 14.796,
+      "fps": 67.59,
+      "hash": "c569204c",
+      "meanAbs": 3.1602,
+      "p99": 63.708,
+      "max": 179.313,
+      "pctOver2": 20.415,
+      "pctOver8": 7.2,
+      "drawCalls": 123,
+      "triangles": 828238
+    }
+  ],
+  "lamps": {
+    "count": 27,
+    "inView": 15,
+    "mode": "clustered"
+  }
+}

@@ -220,7 +220,7 @@ async function boot() {
   const t = params.get('t');
   const atmo = new Atmosphere({
     scene, renderer, camera, timeOfDay: t == null ? 'afternoon' : Number.isFinite(+t) ? +t : t,
-    shadows: { cascades: 2, near: 24, far: [120, 240, 420], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 40,
+    shadows: { cascades: +params.get('cascades') || 2, near: 24, far: [120, 240, 420], kernel: params.get('shadows') || 'fast' }, maxCasterHeight: 40,
   });
 
   // ---------------------------------------------------------------- load: playground, then the model (optional)
@@ -342,7 +342,8 @@ async function boot() {
   if (!NOFX) {
     try {
       const { width, height } = engine.size;
-      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8 }, msaaMaxPixels: MSAA_MAX });
+      postfx = new PostFX(renderer, scene, camera, { atmosphere: atmo, width, height, pixelRatio: engine.pixelRatio, ao: { radius: 0.9, thickness: 0.9, samples: 8 }, msaaMaxPixels: MSAA_MAX, gbuffer: params.get('gbuffer') === '1', aa: params.get('aa') || 'auto' });
+      player.traverse((o) => { if (o.isMesh) postfx.track(o); }); // the character moves: per-object velocity (replayed whenever the G-buffer is built)
     } catch (e) { console.warn('[character] post-processing unavailable', e); atmo.setFogMode('scene'); }
   }
   engine.renderFn = (sc, cam, dt) => {
@@ -409,9 +410,12 @@ async function boot() {
     quiet() {
       if (postfx) postfx.autoExposure = false;
       const su = atmo.sky.material.uniforms; su.uTime.value = 0; su.uCloudOffset.value.set(0.13, 0.41); // pin the sky (stars, clouds)
+      if (postfx && postfx.history) { postfx.history.reset(); for (let i = 0; i < 32; i++) postfx.render(0); } // TAA: converge from a clean history
     },
     settings: {
       'shadows.kernel': { get: () => atmo.shadowKernel, set: (v) => atmo.setShadowKernel(v) },
+      'postfx.aa': { get: () => (postfx ? postfx.aa : null), set: (v) => { if (postfx) postfx.set('aa', v); } },
+      'postfx.gbuffer': { get: () => !!(postfx && postfx.gbuffer), set: (v) => { if (postfx) postfx.set('gbuffer', !!v); } },
       'postfx.ao': { get: () => !!(postfx && postfx.ao.enabled), set: (v) => { if (postfx) postfx.ao.enabled = !!v; } },
     },
   });
@@ -429,6 +433,7 @@ async function boot() {
   engine.start();
   loading.hide(400);
   harness.setReady();
+  if (bp.enabled) harness.freeze(); // ?bench=1: no live ticks before the first pose, so captures reproduce across loads
 }
 
 boot().catch((err) => {

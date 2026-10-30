@@ -2,7 +2,8 @@
 // street lights (cobra heads on arterials, per-street styles from the `streets.lampStyle` rule - e.g. ornate
 // trident standards or twin globes - extra `streets.featureLamps` standards, acorn lamps at OSM lamp nodes) + 8 real PointLights at night on the lamps nearest the view (engine
 // NearestLights: only lamps whose light can reach the frustum compete; >8 forward lights cost ~0.4-0.8 ms each
-// on Apple GPUs, and the 16 nearest-by-distance lamps of old were mostly behind / under the camera); traffic signals (mast
+// on Apple GPUs, and the 16 nearest-by-distance lamps of old were mostly behind / under the camera; opt-in `lights.clustered`:
+// every lamp within lights.clusteredRange of the camera becomes a render/ClusteredLights light instead); traffic signals (mast
 // arms over wide approaches, pedestal poles otherwise, visored heads with backplates, pedestrian heads
 // with walk / flashing-hand phases, push buttons, illuminated street-name signs) driven by the phase
 // Traffic.js reads (`signals[].state`); trees (placement here, rendering in Vegetation.js); parked cars
@@ -22,6 +23,8 @@
 //   streets.utilityPoles(name, road) false = wiring underground on that residential street (default true)
 //   signStyle                       Furniture.js buildSignAtlas style (posters, manhole text, blade colours)
 //   treeRules / treeMix             Vegetation.js species rules / mixes
+//   lights                          { clustered: ClusteredLights, clusteredRange = 220, clusteredFade = 30 } lamp lights
+//                                   in a cluster list (NearestLights mode 'clustered'); default: the 8-PointLight pool
 import * as THREE from 'three';
 import { RBIT, samplePolyline } from './RoadNetwork.js';
 import { pointInPoly, ringBounds, signedArea, mulberry32, hashStr, clamp } from './geom.js';
@@ -100,7 +103,7 @@ class FurnitureSet {
 const roadRule = (v, dflt) => (typeof v === 'function' ? v : v instanceof RegExp ? (name) => v.test(name) : () => dflt);
 
 export class Props {
-  constructor({ net, raster, colliders, data, isLand, groundAt, seed = 7, streets = null, signStyle = null, treeRules = null, treeMix = null }) {
+  constructor({ net, raster, colliders, data, isLand, groundAt, seed = 7, streets = null, signStyle = null, treeRules = null, treeMix = null, lights = null }) {
     this.net = net; this.raster = raster; this.colliders = colliders; this.data = data; this.isLand = isLand;
     this.gy = groundAt || (() => 0);
     this.seed = seed;
@@ -111,6 +114,7 @@ export class Props {
       boulevard: roadRule(S.boulevard, false), promenade: roadRule(S.promenade, false), utilityPoles: roadRule(S.utilityPoles, true),
     };
     this.signStyle = signStyle; this.treeRules = treeRules; this.treeMix = treeMix;
+    this.lightOpts = lights && lights.clustered ? lights : null;
     this.rnd = mulberry32(seed);
     this.group = new THREE.Group();
     this.group.name = 'props';
@@ -1064,7 +1068,11 @@ export class Props {
 
   // -------------------------------------------------------------- lights
   buildPointLights() {
-    this.lightPool = new NearestLights({ count: POINT_LIGHTS, color: 0xffc98a, distance: 48, decay: 2, parent: this.group, yOffset: -0.35, name: 'lamp-light' });
+    const L = this.lightOpts; // clustered: no PointLights, lamps within clusteredRange go to the cluster list
+    this.lightPool = new NearestLights({
+      count: POINT_LIGHTS, color: 0xffc98a, distance: 48, decay: 2, parent: this.group, yOffset: -0.35, name: 'lamp-light',
+      ...(L ? { mode: 'clustered', clustered: L.clustered, clusteredRange: L.clusteredRange, clusteredFade: L.clusteredFade } : null),
+    });
     this.pointLights = this.lightPool.lights;
     this._lampN = -1;
   }

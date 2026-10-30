@@ -10,6 +10,7 @@ const SHIM = here('./helpers/dom-shim.mjs');
 const SUITES = [
   { file: 'car-sim.mjs' },
   { file: 'world-build.mjs', shim: true },
+  { file: 'world-lights.mjs', shim: true },
   { file: 'core.mjs' },
   { file: 'assets.mjs' },
   { file: 'rigs.mjs' },
@@ -24,6 +25,12 @@ const SUITES = [
   { file: 'dyn-world.mjs' },
   { file: 'dyn-bridge.mjs', shim: true },
   { file: 'dyn-serialize.mjs' },
+  // render (0.7.0)
+  { file: 'gpu-particles.mjs', shim: true },
+  { file: 'clustered.mjs' },
+  { file: 'shadows.mjs' },
+  { file: 'postfx-options.mjs' },
+  { file: 'gbuffer-chunks.mjs' },
 ];
 let failed = 0, ran = 0;
 const t0 = performance.now();
