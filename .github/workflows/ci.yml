@@ -1,6 +1,9 @@
 # Node checks on every push to main and every pull request: unit / headless world tests, the samples build and the
 # JSDoc -> .d.ts type emit. No browser job: headless Chromium on a GPU-less runner is SwiftShader, so GPU numbers
 # come from the local headed run (npm run bench) and the browser smoke test runs locally (npm run smoke).
+# Node 26 on purpose: the allocation budgets in the tests (bytes per frame / per step from heapUsed deltas) are
+# calibrated on its V8, the one the app's Chromium runs; Node 22's V8 boxes more doubles and reads 2-3x higher
+# (postfx render() 2840 B / frame vs 832, dyn-world steps 2016 B vs ~0), tripping budgets that measure nothing real.
 name: ci
 
 on:
@@ -23,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
       - run: npm ci
       - run: npm test
