@@ -4,6 +4,7 @@
 // world's 4 substeps, gravity 9.81. Run: node test/dyn-soft.mjs (imports the modules by path).
 import v8 from 'node:v8';
 import vm from 'node:vm';
+import { bytesPerCall, functionsOfDir, gate } from './helpers/alloc.mjs';
 import { DynamicsWorld } from '../src/physics/dynamics/DynamicsWorld.js';
 import { SoftBody, VolumeConstraints, tetrahedralize } from '../src/physics/dynamics/softbody.js';
 import { hashF64Array } from '../src/core/mathDet.js';
@@ -528,28 +529,11 @@ const SOFT_GOLDEN = 0x18bfdba3; // positions after 300 steps of detScene (+ - * 
     return { w, s };
   };
   const { w, s } = make(6);
-  for (let f = 0; f < 600; f++) w.step(DT); // warm-up (JIT tiers)
-  performance.now(); process.memoryUsage();
-  // heap growth while fn() runs, Infinity when a GC ran inside (the round is void); best of 3 rounds
-  const grow = (fn) => {
-    if (gc) gc();
-    const prof = new v8.GCProfiler();
-    prof.start();
-    const h0 = process.memoryUsage().heapUsed;
-    fn();
-    const h1 = process.memoryUsage().heapUsed;
-    return prof.stop().statistics.length ? Infinity : h1 - h0;
-  };
-  const best = (fn) => { let b = Infinity; for (let r = 0; r < 3; r++) b = Math.min(b, grow(fn)); return b; };
-  let gcs = 0;
-  {
-    if (gc) gc(); // start with an empty young generation (the checks above leave garbage behind)
-    const prof = new v8.GCProfiler();
-    prof.start();
-    for (let f = 0; f < 500; f++) w.step(DT);
-    gcs = prof.stop().statistics.length;
-  }
-  check('alloc: GCs during 500 steps of a 6x6x6 cube', gcs, 0, 0);
+  for (let f = 0; f < 600; f++) w.step(DT); // warm-up (feedback)
+  // exact bytes per call / step of TurboFan code over a GC-free window, with a control (test/helpers/alloc.mjs); for
+  // the step, every dynamics function it enters is forced into TurboFan with the loop
+  const force = await functionsOfDir(new URL('../src/physics/dynamics/', import.meta.url));
+  gate(check, note, 'step() of a 6x6x6 cube', bytesPerCall((n) => { for (let f = 0; f < n; f++) w.step(DT); }, 300, { warm: 300, budget: 64, force }), { budget: 64, unit: 'step' });
   if (gc) gc();
   const r0 = process.memoryUsage().heapUsed;
   for (let f = 0; f < 500; f++) w.step(DT);
@@ -561,21 +545,16 @@ const SOFT_GOLDEN = 0x18bfdba3; // positions after 300 steps of detScene (+ - * 
   // the solver alone: position passes straight into it, and the per-frame helpers
   const S = s.solver, H = DT / 4;
   const passes = (n) => { for (let i = 0; i < n; i++) S.solvePositions(w, H, i & 3); };
-  passes(8000);
-  // heapUsed carries a constant few-KB offset between rounds (accounting granularity, not per call): bound the total
-  // well below one heap number per call (4000 x 16 B = 64 KB) and the slope between 4000 and 20 000 calls
-  const p4 = best(() => passes(4000)), p20 = best(() => passes(20000));
-  check('alloc: VolumeConstraints.solvePositions x 4000, heap growth (best of 3)', p4, -Infinity, 8192, 'B');
-  check('alloc: VolumeConstraints.solvePositions, bytes per call (slope 4k -> 20k)', Math.max(0, p20 - p4) / 16000, 0, 0.5, 'B');
+  gate(check, note, 'VolumeConstraints.solvePositions', bytesPerCall(passes, 20000, { warm: 8000 }));
   const sk = SoftBody.skin(s, Float64Array.from(s.topology.points)), out = new Float32Array(s.count * 3), c3 = new Float64Array(3);
   const vsum = new Float64Array(1); // a closure `let` would box every sum (harness allocation)
   s.centroid([0, 0, 0]); s.centroid({ x: 0, y: 0, z: 0 }); sk.update(new Float64Array(s.count * 3)); // every receiver kind
   const helpers = (n) => { for (let i = 0; i < n; i++) { s.centroid(c3); sk.update(out); } };
   const vols = (n) => { let v = 0; for (let i = 0; i < n; i++) v += s.volume(); vsum[0] = v; };
   helpers(5000); vols(5000);
-  check('alloc: centroid() / skin.update x 5000, heap growth (best of 3)', best(() => helpers(5000)), -Infinity, 512, 'B');
+  gate(check, note, 'centroid() + skin.update', bytesPerCall(helpers, 5000));
   // a double returned from a call V8 does not inline is a 16 B heap number: that is all volume() may cost
-  check('alloc: volume() x 5000, bytes per call (the boxed return at most)', best(() => vols(5000)) / 5000, -Infinity, 32, 'B');
+  gate(check, note, 'volume() (the boxed return at most)', bytesPerCall(vols, 5000, { budget: 20 }), { budget: 20 });
   check('alloc: skin of the lattice points reproduces the particles', Math.abs(out[3] - w.particles.pos[s.ids[1] * 3]), 0, 1e-6);
   // what the soft body adds to a step: V8's sampling heap profiler, every allocation of 500 more steps attributed to
   // the file of its frame (DynamicsWorld.step itself boxes a few doubles per step: short-lived, never retained)
@@ -600,7 +579,7 @@ const SOFT_GOLDEN = 0x18bfdba3; // positions after 300 steps of detScene (+ - * 
   } catch { /* no inspector */ }
   // one boxed double per solver call would be 4 x 16 = 64 B/step; a one-off (tier-up) of ~3 KB reads up to ~7 B/step
   if (Number.isFinite(own)) check('alloc: bytes per step allocated in softbody.js frames (sampled)', own, 0, 16, 'B');
-  note(`alloc: 500 steps of the 6x6x6 cube: ${gcs} GCs, ${retained} B retained; sampled B/step by file: ${top || 'n/a'}`);
+  note(`alloc: 500 steps of the 6x6x6 cube: ${retained} B retained; sampled B/step by file: ${top || 'n/a'}`);
   // step cost (60 Hz frame, 4 substeps)
   const cost = (n) => {
     const r = make(n);

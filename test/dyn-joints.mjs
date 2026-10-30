@@ -4,6 +4,7 @@
 // inertia tensors are computed inline. Run: node test/dyn-joints.mjs (imports the modules by path).
 import v8 from 'node:v8';
 import vm from 'node:vm';
+import { bytesPerCall, functionsOfDir, gate } from './helpers/alloc.mjs';
 import { BodyStore, BODY, WORLD_BODY } from '../src/physics/dynamics/state.js';
 import {
   integrateBody, velocityFromPositions, worldInertiaApply, worldInvInertiaApply, generalizedInverseMass, applyPositional,
@@ -536,14 +537,10 @@ function substepIter(B, J, iters) {
   const afterBreak = J.broken[j3] === 1 && !J.connected(p, q);
   check('connected(): pairs of collideConnected-false joints, either order', before);
   check('connected(): dropped on remove and on break', afterRemove && afterBreak);
-  const lookups = (n) => { let hits = 0; for (let i = 0; i < n; i++) if (J.connected(i & 7, (i >> 3) & 7)) hits++; return hits; };
-  lookups(1e6); // warm-up (a top-level loop would run unoptimised and box)
-  const exactLookup = v8.getHeapStatistics().total_allocated_bytes !== undefined; // Node >= 26 (NaN elsewhere)
-  const a0 = exactLookup ? v8.getHeapStatistics().total_allocated_bytes : 0;
-  lookups(1e6);
-  // one boxed double per lookup would be 16 B; V8's counter shows ~0.1-0.3 B per lookup of background noise
-  if (exactLookup) check('connected(): bytes counted per lookup (V8 noise only)', (v8.getHeapStatistics().total_allocated_bytes - a0) / 1e6, 0, 2, 'B');
-  else console.log('NOTE  connected(): per-lookup allocation counter unavailable on this Node (needs total_allocated_bytes)');
+  // exact bytes per lookup of the loop in TurboFan, one GC-free window, with a control (test/helpers/alloc.mjs)
+  const hits = new Int32Array(1);
+  const lookups = (n) => { let k = 0; for (let i = 0; i < n; i++) if (J.connected(i & 7, (i >> 3) & 7)) k++; hits[0] = k; };
+  gate(check, note, 'connected()', bytesPerCall(lookups, 1e5), { unit: 'lookup' });
   void j2;
 }
 {
@@ -587,11 +584,10 @@ const stateHash = (B) => hashF64Array(B.quat, hashF64Array(B.pos, undefined, 0, 
 
   let gc = globalThis.gc;
   if (!gc) { try { v8.setFlagsFromString('--expose-gc'); gc = vm.runInNewContext('gc'); } catch { gc = null; } }
-  const exact = v8.getHeapStatistics().total_allocated_bytes !== undefined; // Node >= 26
   const { B, J } = scene();
-  const N = 4800, alloc = () => (exact ? v8.getHeapStatistics().total_allocated_bytes : 0);
-  run(B, J, 3 * N); // warm-up: JIT tiers settle (their code and feedback are allocated here, once)
-  performance.now(); alloc(); // both initialise lazily on first use: keep that out of the measured window
+  const N = 4800;
+  run(B, J, 3 * N); // warm-up: feedback, and the JIT's code allocated here, once
+  performance.now();
   if (gc) gc();
   const h0 = process.memoryUsage().heapUsed;
   run(B, J, N);
@@ -600,16 +596,16 @@ const stateHash = (B) => hashF64Array(B.quat, hashF64Array(B.pos, undefined, 0, 
   run(B, J, N);
   if (gc) gc();
   const h2 = process.memoryUsage().heapUsed;
-  run(B, J, N); // settle after the forced gc, then count allocation and time over one more run
-  const a0 = alloc(), t0 = performance.now();
+  run(B, J, N); // settle after the forced gc, then time one more run
+  const t0 = performance.now();
   run(B, J, N);
-  const ms = performance.now() - t0, a1 = alloc();
+  const ms = performance.now() - t0;
   check('alloc: retained heap growth, run 1 (4800 substeps, gc before/after)', (h1 - h0) / 1024, -Infinity, 4, 'KB');
   check('alloc: retained heap growth, run 2', (h2 - h1) / 1024, -Infinity, 4, 'KB');
-  // V8's allocation counter shows 30-90 B/substep of background noise here even though the sampling heap profiler
-  // attributes ~0 B to the engine; one boxed double per joint and substep would already be 25 x 16 = 400 B
-  if (exact) check('alloc: bytes counted per substep (26 bodies, 25 joints; V8 noise ~30-90)', (a1 - a0) / N, 0, 128, 'B');
-  else note('alloc: Node < 26, total_allocated_bytes unavailable; only the retained heap growth is checked');
+  // exact bytes per substep in TurboFan (the substep loop, substep() and every dynamics function it enters forced; one
+  // GC-free window; a control): one boxed double per joint and substep would already be 25 x 16 = 400 B
+  const force = [substep, ...(await functionsOfDir(new URL('../src/physics/dynamics/', import.meta.url)))];
+  gate(check, note, 'substep (26 bodies, 25 joints)', bytesPerCall((n) => run(B, J, n), N, { warm: N, force }), { unit: 'substep' });
   if (!gc) note('alloc: no gc available: retained heap growth measured without gc');
   note(`perf: ${(ms / N * 1000).toFixed(1)} us per substep for 26 bodies / 25 joints (${(ms / N / 25 * 1000).toFixed(2)} us per joint incl. integration)`);
 }

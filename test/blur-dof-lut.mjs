@@ -4,7 +4,7 @@
 // sizing, shader contracts (early-outs, uniforms) and an allocation-free render() on a stub renderer (draws are no-ops,
 // so the GLSL itself is checked in the browser).
 // Run: node test/blur-dof-lut.mjs
-import v8 from 'node:v8';
+import { bytesPerCall, gate } from './helpers/alloc.mjs';
 import * as THREE from 'three';
 import { MotionBlurPass, MOTION_BLUR_DEFAULTS } from '../src/render/passes/MotionBlurPass.js';
 import { DoFPass, DOF_DEFAULTS, circleOfConfusion, vogelDisc } from '../src/render/passes/DoFPass.js';
@@ -30,15 +30,8 @@ const near = (a, b, eps) => Math.abs(a - b) <= eps;
 let seed = 0x9e3779b9;
 const rnd = () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
-performance.now(); process.memoryUsage();
-function measureAlloc(fn) {
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  fn();
-  const h1 = process.memoryUsage().heapUsed;
-  return { bytes: h1 - h0, gcs: prof.stop().statistics.length };
-}
+// allocation: exact bytes per call of TurboFan code, with a control (test/helpers/alloc.mjs)
+const note = (s) => results.push(`NOTE  ${s}`);
 
 // enough of WebGLRenderer for render(): binds targets, counts draws and clears (no allocation), optionally records
 // each draw with the target it went to, whether that target was cleared first and the autoClear state at the time
@@ -200,9 +193,7 @@ function balanced(src) {
   disposeLut(mine);
   check('disposeLut disposes the texture', disposed, 1);
   // constant inputs: a double computed by the caller and passed to a non-inlined call is boxed on the caller's side
-  for (let i = 0; i < 50000; i++) lutLookup(fl, 0.31, 0.47, 0.73, out); // warm (optimised code)
-  const lutAlloc = measureAlloc(() => { for (let i = 0; i < 50000; i++) lutLookup(fl, 0.31, 0.47, 0.73, out); });
-  check('lutLookup into out x50000: heap growth', lutAlloc.bytes, -Infinity, 64 * 1024, 'B');
+  gate(check, note, 'lutLookup into out', bytesPerCall((n) => { for (let i = 0; i < n; i++) lutLookup(fl, 0.31, 0.47, 0.73, out); }, 50000));
 }
 
 // ================================================================================================ MotionBlurPass
@@ -317,10 +308,7 @@ function balanced(src) {
   check('gbuffer back: MB_CAMERA_ONLY removed', !('MB_CAMERA_ONLY' in mb._velocityMat.defines));
   r.log = null;
   // allocation with the shutter path live (a constant dt: a dt computed in the loop would be boxed by this caller)
-  for (let i = 0; i < 50000; i++) mb.render(r, null, readBuffer, 0.0125); // warm (optimised code)
-  const a = measureAlloc(() => { for (let i = 0; i < 50000; i++) mb.render(r, null, readBuffer, 0.0125); });
-  check('motion blur render() x50000: heap growth', a.bytes, -Infinity, 64 * 1024, 'B');
-  check('motion blur render() x50000: GCs', a.gcs, 0, 0);
+  gate(check, note, 'motion blur render()', bytesPerCall((n) => { for (let i = 0; i < n; i++) mb.render(r, null, readBuffer, 0.0125); }, 50000), { unit: 'frame' });
   check('motion blur dispose(): no throw', !throws(() => mb.dispose()));
 }
 
@@ -421,10 +409,7 @@ function balanced(src) {
   dof.render(r, null, readBuffer);
   check('stableDepth off: define removed', !('DOF_STABLE_DEPTH' in dof._compositeMat.defines));
   r.log = null;
-  for (let i = 0; i < 50000; i++) dof.render(r, null, readBuffer); // warm (optimised code)
-  const a = measureAlloc(() => { for (let i = 0; i < 50000; i++) dof.render(r, null, readBuffer); });
-  check('DoF render() x50000: heap growth', a.bytes, -Infinity, 64 * 1024, 'B');
-  check('DoF render() x50000: GCs', a.gcs, 0, 0);
+  gate(check, note, 'DoF render()', bytesPerCall((n) => { for (let i = 0; i < n; i++) dof.render(r, null, readBuffer); }, 50000), { unit: 'frame' });
   // a pass-through configuration the lead can gate on: 10 mm f/22 focused at 10 m, 1964 px
   let worst = 0;
   for (let d = 0.8; d < 6000; d *= 1.05) worst = Math.max(worst, Math.abs(circleOfConfusion(d, 10, 10, 22, 24, 1964)));

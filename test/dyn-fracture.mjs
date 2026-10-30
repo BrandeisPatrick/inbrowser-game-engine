@@ -1,8 +1,9 @@
 // Headless checks for pre-fractured bodies (src/physics/dynamics/fracture.js) and their renderer (src/render/Fracture.js):
 // splitConvex on a cube, fracturePieces (volumes, determinism, glue graph exactness, impact clustering), FracturedBody on
 // a 40-piece 4 x 2 x 0.5 m wall (rest, a 30 kg sphere at 20 m/s, breakNear / breakAll, update() bookkeeping, a
-// serialize / from round trip mid-fracture with a golden hash, dispose), allocation of update() / breakNear(), and
-// FractureMesh under plain Node (three only, no DOM). Run: node test/dyn-fracture.mjs
+// serialize / from round trip mid-fracture with a golden hash, dispose), allocation of update() / breakNear() (exact
+// bytes of TurboFan code, test/helpers/alloc.mjs), and FractureMesh under plain Node (three only, no DOM).
+// Run: node test/dyn-fracture.mjs
 import v8 from 'node:v8';
 import vm from 'node:vm';
 import * as THREE from 'three';
@@ -15,6 +16,7 @@ import { integrateBody, velocityFromPositions } from '../src/physics/dynamics/xp
 import { PhysicsWorld } from '../src/physics/PhysicsWorld.js';
 import { FractureMesh, pieceGeometry } from '../src/render/Fracture.js';
 import { hashF64Array, hashU32, mulberry32 } from '../src/core/mathDet.js';
+import { BOXED, bytesPerCall, gate } from './helpers/alloc.mjs';
 
 const DT = 1 / 120;
 let failures = 0, passes = 0;
@@ -29,28 +31,22 @@ function check(name, value, lo = 1, hi = lo, unit = '') {
 }
 const note = (s) => results.push(`NOTE  ${s}`);
 
-// Bytes allocated and GCs run while fn() executes (as test/core.mjs), plus the retained growth across forced gcs.
+// Allocation: bytes per call of TurboFan code over a GC-free window, exact (test/helpers/alloc.mjs), with a control that
+// allocates one array per call on top; plus the retained growth across forced gcs (best of `tries`).
 let gc = globalThis.gc;
 if (!gc) { try { v8.setFlagsFromString('--expose-gc'); gc = vm.runInNewContext('gc'); } catch { gc = null; } }
-performance.now(); process.memoryUsage();
-function measureAlloc(fn, tries = 1) {
-  let best = null;
-  for (let i = 0; i < tries; i++) { const m = measureOnce(fn); if (!best || m.retained + m.bytes < best.retained + best.bytes) best = m; }
+function retainedAlloc(fn, tries = 1) {
+  let best = Infinity;
+  for (let i = 0; i < tries; i++) {
+    if (gc) gc();
+    const r0 = process.memoryUsage().heapUsed;
+    fn();
+    if (gc) gc();
+    best = Math.min(best, process.memoryUsage().heapUsed - r0);
+  }
   return best;
 }
-function measureOnce(fn) {
-  if (gc) gc();
-  const r0 = process.memoryUsage().heapUsed;
-  const prof = new v8.GCProfiler();
-  prof.start();
-  const h0 = process.memoryUsage().heapUsed;
-  fn();
-  const h1 = process.memoryUsage().heapUsed;
-  const gcs = prof.stop().statistics.length;
-  if (gc) gc();
-  const r1 = process.memoryUsage().heapUsed;
-  return { bytes: h1 - h0, gcs, retained: r1 - r0 };
-}
+const allocGate = (name, m, budget = 1, unit = 'call') => gate(check, note, name, m, { budget, unit });
 
 // ---- geometry helpers ----------------------------------------------------------------------------------------------
 // max over the piece's face planes of n . x + d at an ORIGINAL-frame point (<= 0 inside; ~0 on the boundary)
@@ -502,11 +498,8 @@ let golden = 0;
   check('impactBreak statics: the rocking wall\'s ground contacts break more glue', r3.broke > r1.broke && r3.restBroke === 0);
   note(`impactBreak: ${r1.broke} of ${r1.fb.joints.length} joints broken by the hit (largest piece contact impulse ${r1.maxImp.toFixed(0)} N s, threshold 100 N s, radius 0.5 m)`);
   const opts = { impulse: 1e9, radius: 0.5 }, w = r1.w, fb = r1.fb;
-  const loop = (n) => { for (let i = 0; i < n; i++) fb.impactBreak(w.contacts, opts); };
-  loop(2000);
-  const m = measureAlloc(() => loop(1e4), 3);
-  check('alloc: impactBreak() x1e4 (no qualifying contact), GCs', m.gcs, 0, 0);
-  check('alloc: impactBreak() x1e4, heap growth (noise level)', m.bytes, -Infinity, 65536, 'B');
+  let sink = 0;
+  allocGate('impactBreak() x1e4 (no qualifying contact)', bytesPerCall((n) => { for (let i = 0; i < n; i++) sink += fb.impactBreak(w.contacts, opts); }, 1e4));
 }
 
 // ================================================================================== 7c. impactPlugin (break before the solve)
@@ -588,27 +581,32 @@ let golden = 0;
 {
   const { w, fb } = wallWorld();
   stepRun(w, fb, 30);
-  // heap growth over 1e5 calls stays in the measurement noise (~10-100 KB here whatever runs, i.e. < 1 B per call:
-  // one boxed double would be 16 B per call); retained growth across forced gcs over 1000 calls is the contract
-  const run = (n) => { for (let i = 0; i < n; i++) fb.update(); };
-  run(2000);
-  const mu = measureAlloc(() => run(1e5)), mu1 = measureAlloc(() => run(1000), 5);
-  check('alloc: update() x1e5, GCs', mu.gcs, 0, 0);
-  check('alloc: update() x1e5, heap growth (noise level)', mu.bytes, -Infinity, 65536, 'B');
-  check('alloc: update() x1000, retained after gc (best of 5)', mu1.retained, -Infinity, 4096, 'B');
-  const near = (n) => { for (let i = 0; i < n; i++) fb.breakNear(9, 9, 9, 0.5); }; // scans, breaks nothing
-  near(2000);
-  const mn = measureAlloc(() => near(1e5)), mn1 = measureAlloc(() => near(1000), 5);
-  check('alloc: breakNear() x1e5 (no hit), GCs', mn.gcs, 0, 0);
-  check('alloc: breakNear() x1e5, heap growth (noise level)', mn.bytes, -Infinity, 65536, 'B');
-  check('alloc: breakNear() x1000, retained after gc (best of 5)', mn1.retained, -Infinity, 4096, 'B');
-  // breaking calls: one joint per call on fresh walls would allocate in the constructor, so measure one wall's breaks
-  const { fb: fb4 } = wallWorld();
-  for (let i = 0; i < 50; i++) fb4.breakNear(0, -10, 0, 0.1); // warm the code path
-  let x = -2;
-  const mb = measureAlloc(() => { for (let i = 0; i < 40; i++, x += 0.1) fb4.breakNear(x, 1, 0, 0.2); fb4.breakAll(); fb4.update(); });
-  check('alloc: breakNear() / breakAll() that break 142 joints, GCs', mb.gcs, 0, 0);
-  check('alloc: ... heap growth (noise level)', mb.bytes, -Infinity, 65536, 'B');
+  // zero bytes per call in TurboFan code (one boxed double would be 16 B per call); retained growth across forced gcs
+  // over 1000 calls is the leak contract
+  let sink = 0;
+  const run = (n) => { for (let i = 0; i < n; i++) sink += fb.update(); };
+  allocGate('update() x1e5', bytesPerCall(run, 1e5));
+  check('alloc: update() x1000, retained after gc (best of 5)', retainedAlloc(() => run(1000), 5), -Infinity, 4096, 'B');
+  const near = (n) => { for (let i = 0; i < n; i++) sink += fb.breakNear(9, 9, 9, 0.5); }; // scans, breaks nothing
+  allocGate('breakNear() x1e5 (no hit)', bytesPerCall(near, 1e5));
+  check('alloc: breakNear() x1000, retained after gc (best of 5)', retainedAlloc(() => near(1000), 5), -Infinity, 4096, 'B');
+  // breaking calls, repeatable: break every glue joint of one wall (40 breakNear sweeps + breakAll), then re-glue them
+  // by hand (J.broken = 0 + rebuildConnected: the JointStore's hand-edit path) without update(), so each repeat breaks
+  // the same joints of the same wall (the sweep's x values boxed once: a fresh double per call would be the loop's own
+  // 16 B, 39 x 16 = 624 B per wall)
+  const { w: w4, fb: fb4 } = wallWorld();
+  const XS = []; for (let i = 0, x = -2; i < 40; i++, x += 0.1) XS.push(x);
+  const xs = BOXED(...XS);
+  const reglue = () => { for (let k = 0; k < fb4.joints.length; k++) w4.joints.broken[fb4.joints[k]] = 0; w4.joints.rebuildConnected(); };
+  const breakWall = (f) => { let k = 0; for (let i = 0; i < 40; i++) k += f.breakNear(xs[i], 1, 0, 0.2); return k + f.breakAll(); };
+  const broke = breakWall(fb4); reglue();
+  allocGate(`breakNear() / breakAll() breaking all ${broke} joints of a wall`, bytesPerCall((n) => { for (let i = 0; i < n; i++) { sink += breakWall(fb4); reglue(); } }, 200, { warm: 50 }), 1, 'wall');
+  // update() removing a wall's broken joints from the world happens once per wall: a pool of pre-broken walls, one
+  // per unit (warm-up, compile call and windows included)
+  const pool = [];
+  for (let i = 0; i < 128; i++) { const { fb: f } = wallWorld(); breakWall(f); pool.push(f); }
+  const removeRun = (n) => { for (let i = 0; i < n; i++) { const f = pool.pop(); if (!f) throw new Error('wall pool exhausted'); sink += f.update(); } };
+  allocGate(`update() removing a wall's ${broke} broken joints`, bytesPerCall(removeRun, 4, { warm: 16, tries: 3 }), 16, 'wall');
   if (!gc) note('alloc: no gc available: retained growth measured without gc');
 }
 
@@ -653,10 +651,7 @@ let golden = 0;
   check('FractureMesh interpolate: update(1) = the latest capture', Math.abs(fi.meshes[3].position.x - 4), 0, 1e-12, 'm');
   fi.update(0.25);
   const frames = (n) => { for (let i = 0; i < n; i++) { fi.capture(); fi.update(0.5); fm.update(1); } };
-  frames(2000);
-  const ma = measureAlloc(() => frames(1e4), 3); // best of 3: the first window can still hold JIT tier-up
-  check('alloc: FractureMesh capture() + update() x1e4, GCs', ma.gcs, 0, 0);
-  check('alloc: FractureMesh capture() + update() x1e4, heap growth (noise)', ma.bytes, -Infinity, 65536, 'B');
+  allocGate('FractureMesh capture() + update() x1e4', bytesPerCall(frames, 1e4), 1, 'frame');
   // with the real world
   const { w, fb } = wallWorld();
   stepRun(w, fb, 30);
